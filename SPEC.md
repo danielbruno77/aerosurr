@@ -310,6 +310,19 @@ its networks, rather than adopting its Hydra recipes wholesale.
   Members differ by seed, which changes both initialisation and data order. Each member
   outputs a mean and a variance (Gaussian NLL). Total σ² = mean aleatoric + ensemble
   spread.
+- **ensemble_v2 [DECISION 2026-10-24, Daniel]:**
+  - **Why:** the v1 members, at 20k steps, are ~2× worse than the main model (val Cp rel
+    L2 0.125–0.136 against 0.064), so v1 σ describes a weaker model. v1 is kept as the
+    baseline.
+  - **Members:** 5 heteroscedastic GeoTransolver members (`geotransolver_het`, seeds
+    100–104) at the main-model budget (`train/main.yaml`, ~2.6 h each).
+  - **Scheduling:** a shared claim queue (`train/ensemble_queue.py`,
+    `scripts/aero-ens2-queue.sh`). GPU 1 takes members after v1 is calibrated, then
+    calibrates v2.
+  - **GPU 0 filler:** runs a member only when the predicted wait of the MF queue (from
+    RANS progress) exceeds a member plus 25 min. It pre-empts within seconds when any MF
+    or HF train or eval process appears; the member restarts from scratch, and no member
+    moves between GPUs.
 - σ for integrated forces comes from integrating each member's field.
 - Calibration is fitted on `full_val`, a single temperature per field, and
   reported on `full_test`: coverage at 50/90/95 %, NLL, and Spearman correlation

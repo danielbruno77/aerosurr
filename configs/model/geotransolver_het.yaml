@@ -1,0 +1,10 @@
+# ensemble_v2 member (SPEC §5.4): the main GeoTransolver with a heteroscedastic head
+# (4 means + 4 log-variances, Gaussian NLL), trained at the main-model budget.
+kind: geotransolver
+n_layers: 8
+n_hidden: 256
+n_head: 8
+slice_num: 64
+mlp_ratio: 4
+dropout: 0.0
+heteroscedastic: true

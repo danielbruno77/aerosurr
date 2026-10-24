@@ -32,6 +32,8 @@ eval_app = typer.Typer(no_args_is_help=True, help="Evaluate trained models (SPEC
 app.add_typer(eval_app, name="eval")
 viewer_app = typer.Typer(no_args_is_help=True, help="Interactive 3D viewer data (SPEC §6).")
 app.add_typer(viewer_app, name="viewer")
+ens_app = typer.Typer(no_args_is_help=True, help="Deep-ensemble work queue (SPEC §5.4).")
+app.add_typer(ens_app, name="ensemble")
 
 BEGIN, END = "<!-- BEGIN GENERATED", "<!-- END GENERATED -->"
 
@@ -876,6 +878,61 @@ def report(
     paths, data = state.paths(), state.data()
     done = build_report(paths.runs, paths.data_store / data.store.version, out, figures)
     typer.echo(f"{out}: sections {done or 'none yet'}")
+
+
+@ens_app.command("worker")
+def ensemble_worker(
+    role: Annotated[str, typer.Option(help="primary (claims members, then calibrates) or filler.")],
+    gpu: Annotated[int, typer.Option(help="Physical GPU index (sets CUDA_VISIBLE_DEVICES).")],
+    cpus: Annotated[str, typer.Option(help="CPUs for the member training processes.")],
+    name: Annotated[
+        str, typer.Option(help="Ensemble name (output under paths.runs).")
+    ] = "ensemble_v2",
+    prefix: Annotated[str, typer.Option(help="Member run-name prefix.")] = "ens2",
+    members: Annotated[int, typer.Option(min=2, help="Ensemble size M.")] = 5,
+    model: Annotated[str, typer.Option(help="configs/model/<model>.yaml")] = "geotransolver_het",
+    train: Annotated[str, typer.Option(help="configs/train/<train>.yaml")] = "main",
+    seed0: Annotated[int, typer.Option(help="Member k uses seed seed0 + k.")] = 100,
+    wait_for: Annotated[
+        Path | None, typer.Option(help="primary: start after this file exists.")
+    ] = None,
+    member_hours: Annotated[float, typer.Option(help="filler: expected member wall time.")] = 2.6,
+    margin_hours: Annotated[float, typer.Option(help="filler: extra slack required.")] = 0.4,
+) -> None:
+    """Run ensemble members from a shared queue; GPU-0 filler yields to the MF queue."""
+    import logging
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    from aerosurr.rans.run import parse_cpus
+    from aerosurr.train.ensemble_queue import Job, member_name, run_filler, run_primary
+
+    paths = state.paths()
+    if role not in ("primary", "filler"):
+        raise typer.BadParameter("role must be primary or filler")
+    setup_logging(paths.logs / "aero-ens2", f"worker_{role}_gpu{gpu}")
+    os.sched_setaffinity(0, parse_cpus(cpus))
+    exe = shutil.which("aerosurr") or str(Path(sys.executable).with_name("aerosurr"))
+    job = Job(prefix, members, model, train, seed0, paths.runs, paths.runs / name / "claims")
+    session = "aero-ens2"
+    log = logging.getLogger("aerosurr.ens_queue")
+
+    def finish() -> None:
+        dirs = [str(paths.runs / member_name(prefix, k)) for k in range(members)]
+        env = os.environ | {"CUDA_VISIBLE_DEVICES": str(gpu)}
+        log.info("primary: all %d members done; calibrating %s", members, name)
+        subprocess.run([exe, "eval", "ensemble", *dirs, "--name", name], env=env, check=True)
+        subprocess.run([exe, "report"], cwd=Path(__file__).resolve().parents[2], check=True)
+        log.info("primary: %s calibrated; docs/results.md regenerated", name)
+
+    if role == "primary":
+        run_primary(job, exe, gpu, cpus, session, wait_for, finish)
+    else:
+        rans_log = (paths.logs / "aero-rans" / "latest.log").resolve()
+        mf_log = paths.logs / "aero-train0" / "mf_queue.log"
+        run_filler(job, exe, gpu, cpus, session, mf_log, rans_log, member_hours, margin_hours)
 
 
 # --------------------------------------------------------------------------- viewer
