@@ -62,6 +62,7 @@ def test_build_report(tmp_path: Path) -> None:
             "cd_sigma_mean_counts": 4.5,
             "aleatoric_fraction": 0.6,
             "per_run": {r: {"cd_std_cal": 0.004} for r in test},
+            "temperature": {"cd": 2.0},
         },
         "ensemble_full_test.json",
     )

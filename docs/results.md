@@ -37,3 +37,20 @@ training longer.
 ## Multi-fidelity correction (coarse RANS → HRLES)
 
 - LF alone (coarse RANS mapped onto the HF mesh, 3 test cars): Cp rel L2 0.298, Cd MAE 19.6 counts.
+## Deep ensemble, calibrated on `full_val`, reported on `full_test`
+
+Reported ensemble: **5 × PhysicsNeMo Transolver, 20k steps** (`ensemble_v1`, 5 members).
+
+| Ensemble | Quantity | 50 % | 90 % | 95 % | NLL | Spearman(σ, \|err\|) |
+|---|---|---|---|---|---|---|
+| ensemble_v1 | cp (per cell) | 0.55 | 0.92 | 0.96 | -2.69 | 0.63 |
+| ensemble_v1 | cf_x (per cell) | 0.53 | 0.91 | 0.95 | -7.44 | 0.72 |
+| ensemble_v1 | cf_y (per cell) | 0.53 | 0.91 | 0.95 | -7.79 | 0.75 |
+| ensemble_v1 | cf_z (per cell) | 0.54 | 0.92 | 0.95 | -7.86 | 0.75 |
+| ensemble_v1 | Cd (per car) | 0.48 | 0.94 | 0.98 | – | 0.19 |
+
+| Ensemble | Members | Ensemble-mean Cd MAE (counts) | Mean calibrated σ(Cd) (counts) | Cd temperature | Aleatoric share |
+|---|---|---|---|---|---|
+| ensemble_v1 (5 × PhysicsNeMo Transolver, 20k steps) | 5 | 4.7 | 6.6 | 2.24 | 94% |
+
+![Calibration](figures/calibration.png)
