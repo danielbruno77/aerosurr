@@ -65,3 +65,15 @@ def test_unknown_key_rejected(config_dir: Path) -> None:
     d["fields"]["pressure_typo"] = "x"
     with pytest.raises(ValidationError):
         DataConfig.model_validate(d)
+
+
+def test_step_budget_schedule() -> None:
+    from aerosurr.config import TrainConfig, resolve_schedule
+
+    tc = TrainConfig(epochs=1, steps=20_000, eval_every_steps=2_000, full_eval_every_steps=10_000)
+    s11 = resolve_schedule(tc, 11)
+    assert s11.epochs == 1819 and s11.eval_every == 182 and s11.full_eval_every == 909
+    assert s11.warmup_epochs == 91
+    s400 = resolve_schedule(tc, 400)
+    assert s400.epochs == 50 and s400.eval_every == 5 and s400.full_eval_every == 25
+    assert resolve_schedule(TrainConfig(epochs=3), 7).epochs == 3  # no budget: unchanged

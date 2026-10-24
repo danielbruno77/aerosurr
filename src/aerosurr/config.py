@@ -229,6 +229,9 @@ class ModelConfig(_Strict):
 
 
 class TrainConfig(_Strict):
+    """Training schedule. With `steps`, epochs and eval cadences follow from the number of
+    training runs, so different training-set sizes get the same budget."""
+
     split: str = Field(default="full", description="uses <split>_train and <split>_val")
     epochs: int = Field(gt=0)
     points: int = Field(default=200_000, gt=0, description="cells sampled per car per step")
@@ -242,6 +245,11 @@ class TrainConfig(_Strict):
     data_on_gpu: bool = True
     eval_every: int = Field(default=5, gt=0, description="epochs between pool validations")
     full_eval_every: int = Field(default=25, gt=0, description="epochs between full-mesh evals")
+    steps: int | None = Field(
+        default=None, gt=0, description="step budget; overrides epochs as ceil(steps / runs)"
+    )
+    eval_every_steps: int | None = Field(default=None, gt=0, description="with steps")
+    full_eval_every_steps: int | None = Field(default=None, gt=0, description="with steps")
     max_train_runs: int | None = Field(default=None, gt=0)
     train_runs: list[str] | None = Field(
         default=None, description="explicit training runs (overrides split/max_train_runs)"
@@ -294,3 +302,21 @@ def load_model(name: str, cfg_dir: Path | None = None) -> ModelConfig:
 
 def load_train(name: str, cfg_dir: Path | None = None) -> TrainConfig:
     return TrainConfig.model_validate(_read_yaml(config_dir(cfg_dir) / "train" / f"{name}.yaml"))
+
+
+def resolve_schedule(tc: TrainConfig, n_runs: int) -> TrainConfig:
+    """Turn a step budget into epochs, eval cadences and a 5 % warm-up for `n_runs` runs."""
+    if tc.steps is None:
+        return tc
+    import math
+
+    def every(steps: int | None, default: int) -> int:
+        return max(1, round(steps / n_runs)) if steps else default
+
+    epochs = math.ceil(tc.steps / n_runs)
+    return tc.model_copy(update={
+        "epochs": epochs,
+        "eval_every": every(tc.eval_every_steps, tc.eval_every),
+        "full_eval_every": min(epochs, every(tc.full_eval_every_steps, tc.full_eval_every)),
+        "warmup_epochs": max(1, math.ceil(0.05 * epochs)),  # 5 % of the budget
+    })  # fmt: skip

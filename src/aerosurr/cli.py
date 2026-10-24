@@ -613,6 +613,29 @@ def rans_map(
     typer.echo(f"{len(index)} runs mapped -> {store / LF_DIR}")
 
 
+@rans_app.command("lf-runs")
+def rans_lf_runs(
+    split: Annotated[str, typer.Option(help="Split to draw from.")] = "full_train",
+    n: Annotated[int | None, typer.Option(help="First n, in RANS queue order.")] = None,
+) -> None:
+    """Runs of a split that have mapped LF fields, in RANS queue order (comma-separated)."""
+    from aerosurr.data.splits import load_manifest
+    from aerosurr.rans.batch import rans_subset
+    from aerosurr.rans.mapping import LF_DIR
+
+    paths, data = state.paths(), state.data()
+    lf_dir = paths.data_store / data.store.version / LF_DIR
+    manifest = load_manifest(paths.data_raw / "splits/manifest.json")
+    members = set(manifest[split])
+    runs = [r for r in rans_subset(manifest) if r in members and (lf_dir / f"{r}.npz").is_file()]
+    if n is not None:
+        if len(runs) < n:
+            typer.echo(f"only {len(runs)} {split} runs have LF fields (wanted {n})", err=True)
+            raise typer.Exit(1)
+        runs = runs[:n]
+    typer.echo(",".join(runs))
+
+
 @rans_app.command("summary")
 def rans_summary(
     cases: Annotated[list[Path], typer.Argument(help="Case dirs with aerosurr_run.json.")],
@@ -672,6 +695,9 @@ def train_run(
     seed: Annotated[
         int | None, typer.Option(help="Override train.seed (ensemble members).")
     ] = None,
+    train_runs: Annotated[
+        str | None, typer.Option(help="Comma-separated training runs (overrides the split).")
+    ] = None,
 ) -> None:
     """Train a surface model on the compact store; checkpoints and metrics in paths.runs/<name>."""
     import os
@@ -692,6 +718,8 @@ def train_run(
     mc, tc = load_model(model, state.config_dir), load_train(train, state.config_dir)
     if seed is not None:
         tc = tc.model_copy(update={"seed": seed})
+    if train_runs:
+        tc = tc.model_copy(update={"train_runs": [r.strip() for r in train_runs.split(",")]})
     name = name or f"{model}_{train}_{datetime.now():%Y%m%dT%H%M}"
     store = paths.data_store / data.store.version
     stats = json.loads((store / STATS).read_text())

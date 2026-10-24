@@ -16,7 +16,7 @@ import torch
 from numpy.typing import NDArray
 from torch import nn
 
-from aerosurr.config import ModelConfig, TrainConfig
+from aerosurr.config import ModelConfig, TrainConfig, resolve_schedule
 from aerosurr.data.splits import run_number
 from aerosurr.data.store import load_group, load_index
 from aerosurr.data.validate import read_geo_refs
@@ -224,13 +224,17 @@ def train(
     out_dir: Path,
     device: torch.device,
 ) -> TrainSummary:
-    tc, hetero = train_cfg, model_cfg.heteroscedastic
+    hetero = model_cfg.heteroscedastic
+    train_runs = (
+        train_cfg.train_runs or manifest[f"{train_cfg.split}_train"][: train_cfg.max_train_runs]
+    )
+    tc = resolve_schedule(train_cfg, len(train_runs))
     torch.manual_seed(tc.seed)
     out_dir.mkdir(parents=True, exist_ok=True)
-    cfg_dump = {"model": model_cfg.model_dump(), "train": tc.model_dump(), "stats": stats}
+    cfg_dump = {"model": model_cfg.model_dump(), "train": tc.model_dump(), "stats": stats,
+                "train_runs": train_runs}  # fmt: skip
     (out_dir / "config.json").write_text(json.dumps(cfg_dump, indent=2))
     norm = Normaliser.from_stats(stats)
-    train_runs = tc.train_runs or manifest[f"{tc.split}_train"][: tc.max_train_runs]
     val_runs = manifest[f"{tc.split}_val"]
     lf, res = model_cfg.lf_inputs, model_cfg.predict_residual
     data_dev = device if tc.data_on_gpu else torch.device("cpu")

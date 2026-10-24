@@ -1,0 +1,15 @@
+# MF study (SPEC §5.3): the same 20k-step budget for every training-set size N, so HF-only
+# and MF models trained on the same N runs (`train run --train-runs`) compare directly.
+split: full
+epochs: 1
+steps: 20000
+eval_every_steps: 2000
+full_eval_every_steps: 10000
+points: 200000
+lr: 0.001
+weight_decay: 0.0001
+seed: 0
+compile: true
+bf16: true
+data_on_gpu: true
+max_hours: 1.5

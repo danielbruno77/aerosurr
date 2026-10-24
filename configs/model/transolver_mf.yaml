@@ -1,0 +1,12 @@
+# Multi-fidelity correction (SPEC §5.3, model 3): the main Transolver with the mapped
+# coarse-RANS (Cp, Cf) as 4 extra input features per cell, learning the HF - LF residual.
+kind: transolver
+n_layers: 8
+n_hidden: 256
+n_head: 8
+slice_num: 64
+mlp_ratio: 4
+dropout: 0.0
+heteroscedastic: false
+lf_inputs: true
+predict_residual: true
