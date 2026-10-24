@@ -1,0 +1,14 @@
+# PointNet baseline: the floor the main model has to beat.
+split: full
+epochs: 60
+points: 200000
+lr: 0.001
+weight_decay: 0.0001
+warmup_epochs: 2
+seed: 0
+compile: true
+bf16: true
+data_on_gpu: true
+eval_every: 5
+full_eval_every: 30
+max_hours: 1.5

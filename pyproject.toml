@@ -17,8 +17,8 @@ dependencies = [
 
 [project.optional-dependencies]
 # Pick exactly one: `uv sync --extra cu132` on workstation-III, `uv sync --extra cpu` in CI.
-cpu = ["torch==2.14.1"]
-cu132 = ["torch==2.14.1"]
+cpu = ["nvidia-physicsnemo>=2.2.2", "torch==2.14.1", "torchvision"]
+cu132 = ["nvidia-physicsnemo>=2.2.2", "torch==2.14.1", "torchvision"]
 
 [project.scripts]
 aerosurr = "aerosurr.cli:app"
@@ -43,6 +43,10 @@ conflicts = [[{ extra = "cpu" }, { extra = "cu132" }]]
 
 [tool.uv.sources]
 torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu132", extra = "cu132" },
+]
+torchvision = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cu132", extra = "cu132" },
 ]
@@ -89,7 +93,7 @@ no_implicit_reexport = true
 strict_equality = true
 
 [[tool.mypy.overrides]]
-module = ["triton", "triton.*"]
+module = ["triton", "triton.*", "physicsnemo.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

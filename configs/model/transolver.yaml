@@ -1,0 +1,11 @@
+# PhysicsNeMo Transolver (physicsnemo.models.transolver), normals as features and cell
+# centres as the embedding. 8 x 256 x 64 slices: 6.0 M params, 127 ms/step at 200 k points
+# on an RTX 5090 (bf16, torch.compile).
+kind: transolver
+n_layers: 8
+n_hidden: 256
+n_head: 8
+slice_num: 64
+mlp_ratio: 4
+dropout: 0.0
+heteroscedastic: false

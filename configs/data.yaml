@@ -33,3 +33,12 @@ download:
   max_retries: 8
   min_free_gb: 100
   paths_info_batch: 200
+
+store:
+  # Compact store (SPEC §5.1): a fixed random pool per run for training; val/test runs
+  # also keep every native cell for evaluation on the full mesh.
+  version: v1
+  pool_size: 500000
+  seed: 0
+  full_splits: [full_val, full_test]
+  stats_split: full_train

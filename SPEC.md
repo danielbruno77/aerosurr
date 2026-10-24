@@ -92,7 +92,9 @@ aero-surrogate-demo/
 - On the server, torch 2.14.1 comes from the cu132 wheel index (`nvidia-smi` reports
   CUDA 13.2); its arch list includes sm_120. CI uses the CPU wheel index. One `uv.lock`
   covers both through the mutually exclusive extras `cu132` and `cpu`
-  (`uv sync --extra cu132` here, `--extra cpu` in CI).
+  (`uv sync --extra cu132` here, `--extra cpu` in CI). Each extra also carries
+  `nvidia-physicsnemo` 2.2.2 and a matching `torchvision` 0.29.1, so a plain `uv sync`
+  without an extra can never pull PyPI's default torch build.
 - Every capability is a CLI command. There are no notebooks on the critical path.
 
 ## 4. Data: DrivAerML
@@ -223,16 +225,29 @@ single-use edges, all at z = −0.3176 m, give Σ A·n = (0, 0, −0.0157 m²).
   32 GB GPU).
   Normalisation statistics come from `full_train` only.
 
-### 5.2 Surrogate (GPU 0) [PROPOSAL]
+### 5.2 Surrogate (GPU 0)
+
+**[DECISION 2026-10-24, Daniel]** The model comes from **NVIDIA PhysicsNeMo**, which the
+job requirements name. PhysicsNeMo is used as a model library inside `aerosurr`. Our own
+data store, training loop, losses, MF inputs (§5.3) and heteroscedastic heads (§5.4) wrap
+its networks, rather than adopting its Hydra recipes wholesale.
 
 - Inputs: point positions and normals sampled from the car surface (geometry
   only, with no morph parameters, so the model applies to new STLs).
   Outputs: Cp and Cf (3) at query points.
 - Baseline: a point-wise MLP plus global geometry encoding (PointNet-style). It
   is cheap and gives a floor.
-- Main model: a Transolver-style physics-attention network, implemented in-house
-  in plain PyTorch, bf16, `torch.compile`. Training uses random point subsets;
-  inference runs in chunks on the full native mesh.
+- Main model: `physicsnemo.models.transolver.Transolver`, with normals as the features
+  and positions as the embedding, in bf16 with `torch.compile`. `GeoTransolver` (and
+  `domino`) are the comparison candidates if time allows. Training uses random point
+  subsets; inference runs in chunks on the full native mesh.
+- Feasibility **[VERIFIED 2026-10-24]**: PhysicsNeMo 2.2.2 (Apache-2.0) runs on torch
+  2.14.1+cu132, sm_120 and Python 3.12.
+  - Transolver (8 layers, width 256, 64 slices, 6.0 M params) on GPU 0 at 200 k points per
+    step: 235 ms eager, **127 ms compiled** for fwd + bwd + AdamW, 17.3 GiB peak.
+  - GeoTransolver: 133 ms compiled, 17.8 GiB.
+  - Fed from host memory (sampling + H2D copy per step): 146 ms.
+  - Transformer Engine is not installed (`use_te=False`).
 - Loss: per-field relative L2, with an optional integrated-force consistency term.
 - Splits: train on `full_train`, select on `full_val`, report on `full_test`.
   Data efficiency uses the nested `super_scarce` ⊂ `scarce` ⊂ `medium` ⊂ `full`
@@ -298,7 +313,8 @@ single-use edges, all at z = −0.3176 m, give Σ A·n = (0, 0, −0.0157 m²).
 - Interactive 3D viewer: static three.js page. It shows decimated test cars with
   per-vertex Cp, |Cf|, error and σ, a case picker and a colour-map toggle.
   Data is exported by `aerosurr viewer export` in a compact binary format.
-  Hosting is GitHub Pages and/or a claude.ai artifact.
+  Hosting: a claude.ai artifact. GitHub Pages needs a public repo, or a paid plan for a
+  private one.
 - Figures: parity (Cd and Cl with σ bars), error-versus-HF-count (MF), calibration
   curves, Cp on the surface (truth / prediction / error / σ).
 
@@ -321,8 +337,9 @@ single-use edges, all at z = −0.3176 m, give Σ A·n = (0, 0, −0.0157 m²).
 - Local equivalents: `make check` (lint + test), `make test-data`, `make test-gpu`,
   `make pre-commit`. As of Day 0 there are 54 CPU tests, 3 data tests and 2 GPU tests,
   all green.
-- **[DECISION]** A self-hosted GPU runner on workstation-III is optional. It is
-  not safe on a public repo.
+- **[DECISION]** A self-hosted GPU runner on workstation-III is optional. The repo is
+  private as of 2026-10-24, which removes GitHub's main objection (fork PRs running code
+  on the runner). Undecided; until then `-m gpu` and `aerosurr env check` run locally.
 
 ## 8. Operations
 
@@ -353,13 +370,14 @@ single-use edges, all at z = −0.3176 m, give Σ A·n = (0, 0, −0.0157 m²).
 1. Download list and order in §4.3. T0, T1 and T2 are running as proposed; T3 waits
    for the RANS subset (5).
 2. ~~Disk~~: resolved, 705 GB free. ~~Bandwidth~~: resolved, bind to `enp97s0`.
-3. GitHub repo: name, public or private, and whether to create it with `gh`
-   (needs Daniel's GitHub auth; `gh` is **not installed** on workstation-III). Self-hosted
-   runner: yes or no. The local repo has commits on `main` and no remote.
-4. Model choice in §5.2 (Transolver-style in-house versus the PhysicsNeMo
-   DoMINO or Transolver recipe).
-5. RANS subset size (~100) and coarse-mesh budget (≤ 45 min per case).
-6. Code licence for the repo (no `LICENSE` file yet; the data is CC BY-SA 4.0).
-7. CPU slot masks in §2 (30-rank slots share the L3 of CCD 3 and CCD 7 with the loaders).
+3. ~~GitHub repo~~: resolved, `danielbruno77/aerosurr`, **private** (2026-10-24). It was
+   briefly public with machine details scrubbed first. Self-hosted runner: still open (§7).
+4. ~~Model choice~~: resolved, NVIDIA PhysicsNeMo (§5.2).
+5. RANS subset size (~100) and per-case budget (target ≤ 30 min): being measured
+   (`docs/rans_benchmark.md`).
+6. ~~Code licence~~: deferred while the repo is private; decide before making it public.
+   The data is CC BY-SA 4.0 either way.
+7. CPU slot masks in §2: 2 × 24 CCD-aligned versus 2 × 30, being measured
+   (`docs/rans_benchmark.md`).
 8. Git identity: no global `user.name` or `user.email` is configured. The Day-0 commit
    was made with `-c` flags only.

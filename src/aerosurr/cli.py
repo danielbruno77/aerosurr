@@ -6,13 +6,16 @@ import json
 import shlex
 import sys
 from pathlib import Path
-from typing import Annotated, cast
+from typing import TYPE_CHECKING, Annotated, cast
 
 import typer
 
 from aerosurr import __version__
 from aerosurr.config import DataConfig, PathsConfig, load_data, load_paths
 from aerosurr.ops import configure_runtime, setup_logging
+
+if TYPE_CHECKING:  # torch is imported lazily: `aerosurr --help` stays fast
+    import torch
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help=__doc__)
 env_app = typer.Typer(no_args_is_help=True, help="Environment and GPU checks.")
@@ -21,6 +24,12 @@ config_app = typer.Typer(no_args_is_help=True, help="Show validated configuratio
 app.add_typer(env_app, name="env")
 app.add_typer(data_app, name="data")
 app.add_typer(config_app, name="config")
+rans_app = typer.Typer(no_args_is_help=True, help="Coarse OpenFOAM RANS cases (SPEC §5.3).")
+app.add_typer(rans_app, name="rans")
+train_app = typer.Typer(no_args_is_help=True, help="Train surface models (SPEC §5.2).")
+app.add_typer(train_app, name="train")
+eval_app = typer.Typer(no_args_is_help=True, help="Evaluate trained models (SPEC §5.5).")
+app.add_typer(eval_app, name="eval")
 
 BEGIN, END = "<!-- BEGIN GENERATED", "<!-- END GENERATED -->"
 
@@ -125,6 +134,35 @@ def env_check(
     raise typer.Exit(0 if rep.passed else 1)
 
 
+@env_app.command("probe")
+def env_probe(
+    cpus: Annotated[str, typer.Option(help="CPU list to pin the probe to, e.g. 24-31,56-63.")],
+    seconds: Annotated[float, typer.Option(help="How long to run.")] = 240.0,
+    gpu: Annotated[int | None, typer.Option(help="CUDA device for the training load.")] = 0,
+    workers: Annotated[int, typer.Option(help="VTP-reading worker processes.")] = 4,
+    runs: Annotated[str, typer.Option(help="Runs whose VTPs the CPU load reads.")] = (
+        "run_2,run_3,run_5,run_6,run_7,run_8"
+    ),
+    json_out: Annotated[Path | None, typer.Option("--json", help="Write results here.")] = None,
+) -> None:
+    """Measure the side load (VTP preprocessing + GPU training steps) on its own cores."""
+    paths = state.paths()
+    configure_runtime(paths.workspace)
+    from aerosurr.data.splits import run_number
+    from aerosurr.probe import run_probe
+    from aerosurr.rans.run import parse_cpus
+
+    vtps = [paths.data_raw / r / f"boundary_{run_number(r)}.vtp" for r in runs.split(",")]
+    missing = [v for v in vtps if not v.is_file()]
+    if missing:
+        raise typer.BadParameter(f"missing VTPs: {missing}")
+    res = run_probe(parse_cpus(cpus), vtps, seconds, workers, gpu)
+    typer.echo(json.dumps(res.summary(), indent=2))
+    if json_out:
+        json_out.parent.mkdir(parents=True, exist_ok=True)
+        json_out.write_text(json.dumps(res.to_json(), indent=2))
+
+
 # --------------------------------------------------------------------------- data
 
 
@@ -164,6 +202,151 @@ def data_inspect(
     if area_path is not None and not rep.passed:
         typer.echo("GATE FAIL: len(areas) != n_cells", err=True)
         raise typer.Exit(1)
+
+
+def _validate_one(args: tuple[str, str, str, str]) -> dict[str, object]:
+    """Worker for `data validate` (module-level so it pickles)."""
+    from dataclasses import asdict
+
+    from aerosurr.config import Freestream, SurfaceFields
+    from aerosurr.data.validate import validate_run
+
+    raw, run, fields_json, fs_json = args
+    res = validate_run(Path(raw), run, SurfaceFields.model_validate_json(fields_json),
+                       Freestream.model_validate_json(fs_json))  # fmt: skip
+    return asdict(res)
+
+
+@data_app.command("validate")
+def data_validate(
+    runs: Annotated[
+        str | None, typer.Option(help="Comma-separated run ids (default: all).")
+    ] = None,
+    workers: Annotated[int, typer.Option(min=1, help="Parallel processes.")] = 8,
+    cpus: Annotated[str | None, typer.Option(help="Pin the workers to these CPUs.")] = None,
+    out: Annotated[
+        Path | None, typer.Option(help="Write the report into this markdown file.")
+    ] = None,
+    json_out: Annotated[Path | None, typer.Option("--json", help="Per-run results.")] = None,
+) -> None:
+    """Reference-force gate: integrated coefficients vs force_mom*_i.csv (SPEC §5.1)."""
+    import os
+    from concurrent.futures import ProcessPoolExecutor
+
+    from aerosurr.data.splits import all_runs, load_manifest
+    from aerosurr.data.validate import RunValidation, render_markdown
+    from aerosurr.rans.run import parse_cpus
+
+    paths, data = state.paths(), state.data()
+    raw = paths.data_raw
+    run_list = runs.split(",") if runs else all_runs(load_manifest(raw / "splits/manifest.json"))
+    if cpus:
+        os.sched_setaffinity(0, parse_cpus(cpus))
+    args = [(str(raw), r, data.fields.model_dump_json(), data.freestream.model_dump_json())
+            for r in run_list]  # fmt: skip
+    results: list[RunValidation] = []
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        for i, d in enumerate(pool.map(_validate_one, args), 1):
+            rv = RunValidation(**d)  # type: ignore[arg-type]
+            results.append(rv)
+            if i % 25 == 0 or i == len(args):
+                typer.echo(f"[{i}/{len(args)}] validated; failures so far: "
+                           f"{sum(not r.passed for r in results)}", err=True)  # fmt: skip
+    text = render_markdown(results)
+    typer.echo(text)
+    if out:
+        write_generated(out, text, "Reference-force validation")
+    if json_out:
+        from dataclasses import asdict
+
+        json_out.parent.mkdir(parents=True, exist_ok=True)
+        json_out.write_text(json.dumps([asdict(r) for r in results], indent=1))
+    raise typer.Exit(0 if all(r.passed for r in results) else 1)
+
+
+def _store_one(args: tuple[str, str, str, str, str, int, bool, int]) -> dict[str, object]:
+    """Worker for `data build-store` (module-level so it pickles)."""
+    from dataclasses import asdict
+
+    from aerosurr.config import Freestream, SurfaceFields
+    from aerosurr.data.store import build_entry
+
+    raw, store, run, fields_json, fs_json, pool, full, seed = args
+    e = build_entry(Path(raw), Path(store), run, SurfaceFields.model_validate_json(fields_json),
+                    Freestream.model_validate_json(fs_json), pool, full, seed)  # fmt: skip
+    return asdict(e)
+
+
+@data_app.command("build-store")
+def data_build_store(
+    runs: Annotated[
+        str | None, typer.Option(help="Comma-separated run ids (default: all).")
+    ] = None,
+    workers: Annotated[int, typer.Option(min=1, help="Parallel processes.")] = 8,
+    cpus: Annotated[str | None, typer.Option(help="Pin the workers to these CPUs.")] = None,
+    report: Annotated[Path | None, typer.Option(help="Validation report (markdown).")] = None,
+) -> None:
+    """Build the compact store and validate every run's integrated forces on the way."""
+    import os
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    from aerosurr.data.splits import all_runs, load_manifest
+    from aerosurr.data.store import StoreEntry, load_index, save_index
+    from aerosurr.data.validate import RunValidation, render_markdown
+    from aerosurr.rans.run import parse_cpus
+
+    paths, data = state.paths(), state.data()
+    sc = data.store
+    raw, store = paths.data_raw, paths.data_store / sc.version
+    manifest = load_manifest(raw / "splits/manifest.json")
+    full = {r for s in sc.full_splits for r in manifest[s]}
+    run_list = runs.split(",") if runs else all_runs(manifest)
+    entries = load_index(store)
+    todo = [r for r in run_list if r not in entries or not (store / entries[r].path).is_file()]
+    if cpus:
+        os.sched_setaffinity(0, parse_cpus(cpus))
+    log_file = setup_logging(paths.logs / "aero-store", "build")
+    import logging
+
+    log = logging.getLogger("aerosurr.store")
+    log.info("store %s: %d runs, %d to build, %d workers; log %s", store, len(run_list),
+             len(todo), workers, log_file)  # fmt: skip
+    meta = {"pool_size": sc.pool_size, "seed": sc.seed, "full_splits": sc.full_splits,
+            "revision": data.source.revision}  # fmt: skip
+    fj, fsj = data.fields.model_dump_json(), data.freestream.model_dump_json()
+    args = [(str(raw), str(store), r, fj, fsj, sc.pool_size, r in full, sc.seed) for r in todo]
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futs = [pool.submit(_store_one, a) for a in args]
+        for i, fut in enumerate(as_completed(futs), 1):
+            e = StoreEntry(**fut.result())  # type: ignore[arg-type]
+            entries[e.run] = e
+            save_index(store, entries, meta)
+            log.info("[%d/%d] %s %s cells, %s, %.1f s, gate %s", i, len(todo), e.run,
+                     f"{e.n_cells:,}", "full+pool" if e.full else "pool", e.seconds,
+                     "ok" if e.passed else "FAIL")  # fmt: skip
+    keys = ("cd", "cl", "clf", "clr", "cs")
+    results = [RunValidation(run=e.run, n_cells=e.n_cells,
+                             ours={w: {k: e.coeffs[w][k] for k in keys} for w in e.coeffs},
+                             ref=e.ref) for e in entries.values() if e.run in run_list]  # fmt: skip
+    text = render_markdown(results)
+    typer.echo(text)
+    if report:
+        write_generated(report, text, "Reference-force validation")
+    raise typer.Exit(0 if all(r.passed for r in results) else 1)
+
+
+@data_app.command("stats")
+def data_stats() -> None:
+    """Normalisation statistics from the training split's pools -> <store>/stats.json."""
+    from aerosurr.data.splits import load_manifest
+    from aerosurr.data.store import STATS, compute_stats
+
+    paths, data = state.paths(), state.data()
+    store = paths.data_store / data.store.version
+    runs = load_manifest(paths.data_raw / "splits/manifest.json")[data.store.stats_split]
+    stats = compute_stats(store, runs) | {"split": data.store.stats_split}
+    (store / STATS).write_text(json.dumps(stats, indent=2))
+    typer.echo(json.dumps(stats, indent=2))
 
 
 @data_app.command("download")
@@ -256,6 +439,256 @@ def data_status() -> None:
             f"{s.bytes_done / 1e9:.2f}/{s.bytes_total / 1e9:.2f} GB ({pct:.1f}%)"
             + (f", {s.bytes_partial / 1e9:.2f} GB in .part files" if s.bytes_partial else "")
         )
+
+
+# --------------------------------------------------------------------------- rans
+
+CASE_META = "aerosurr_case.json"
+
+
+@rans_app.command("setup")
+def rans_setup(
+    run: Annotated[str, typer.Argument(help="DrivAerML run id, e.g. run_1.")],
+    preset: Annotated[str, typer.Option(help="Mesh preset in configs/rans/<config>.yaml.")],
+    ranks: Annotated[int, typer.Option(min=1, max=30, help="MPI ranks (SPEC cap: 30).")],
+    config: Annotated[str, typer.Option(help="configs/rans/<config>.yaml")] = "coarse",
+    iterations: Annotated[int | None, typer.Option(help="Override solver.iterations.")] = None,
+    out: Annotated[Path | None, typer.Option(help="Case dir (default under paths.rans).")] = None,
+) -> None:
+    """Write an OpenFOAM case for one geometry from its STL and geo_ref CSV."""
+    from aerosurr.config import load_rans
+    from aerosurr.data.splits import run_number
+    from aerosurr.data.validate import read_geo_refs
+    from aerosurr.rans.case import write_case
+
+    paths, data = state.paths(), state.data()
+    cfg = load_rans(config, state.config_dir)
+    if iterations is not None:
+        cfg = cfg.model_copy(
+            update={"solver": cfg.solver.model_copy(update={"iterations": iterations})}
+        )
+    n = run_number(run)
+    src = paths.data_raw / run
+    case = out or paths.rans / "cases" / f"{run}_{preset}_np{ranks}"
+    if case.exists():
+        typer.echo(f"{case} exists; remove it or pass --out", err=True)
+        raise typer.Exit(2)
+    ref = read_geo_refs(src / f"geo_ref_{n}.csv").varying
+    grid = write_case(case, cfg, preset, src / f"drivaer_{n}.stl", data.freestream, ref, ranks)
+    meta = {"run": run, "preset": preset, "config": config, "ranks": ranks,
+            "iterations": cfg.solver.iterations, "average_last": cfg.solver.average_last,
+            "potential_init": cfg.solver.potential_init,
+            "keep_volume": cfg.output.keep_volume,
+            "background_cells": grid.n_cells}  # fmt: skip
+    (case / CASE_META).write_text(json.dumps(meta, indent=2))
+    typer.echo(f"{case}  ({grid.n_cells:,} background cells of {grid.h} m)")
+
+
+@rans_app.command("run")
+def rans_run(
+    case: Annotated[Path, typer.Argument(help="Case dir from `aerosurr rans setup`.")],
+    cpus: Annotated[str, typer.Option(help="CPU list, one rank per CPU, e.g. 0-23.")],
+) -> None:
+    """Mesh and solve a case pinned to `--cpus`; writes aerosurr_run.json."""
+    from aerosurr.rans.run import cpu_count_ok, parse_cpus, read_force_mom, run_case
+
+    meta = json.loads((case / CASE_META).read_text())
+    cpu_list = parse_cpus(cpus)
+    if len(cpu_list) != meta["ranks"]:
+        raise typer.BadParameter(
+            f"{len(cpu_list)} CPUs given, case is decomposed for {meta['ranks']}"
+        )
+    cpu_count_ok(cpu_list)
+    paths = state.paths()
+    setup_logging(paths.logs / "aero-rans", case.name)
+    from aerosurr.data.splits import run_number
+
+    fm = paths.data_raw / meta["run"] / f"force_mom_{run_number(meta['run'])}.csv"
+    res = run_case(case.resolve(), cpu_list, meta["preset"], meta["potential_init"],
+                   meta["average_last"], read_force_mom(fm) if fm.is_file() else None,
+                   keep_volume=meta.get("keep_volume", False))  # fmt: skip
+    raise typer.Exit(0 if res.status == "done" else 1)
+
+
+@rans_app.command("batch")
+def rans_batch(
+    runs_file: Annotated[Path, typer.Argument(help="Comma- or newline-separated run ids.")],
+    preset: Annotated[str, typer.Option(help="Mesh preset.")],
+    slots: Annotated[str, typer.Option(help='CPU slots, e.g. "A=0-23;B=32-55".')],
+    config: Annotated[str, typer.Option(help="configs/rans/<config>.yaml")] = "coarse",
+    iterations: Annotated[int | None, typer.Option(help="Override solver.iterations.")] = None,
+    out: Annotated[Path | None, typer.Option(help="Cases root (default paths.rans/batch).")] = None,
+) -> None:
+    """Run the LF RANS queue over CPU slots, one case per slot at a time; resumable."""
+    import logging
+    import re
+
+    from aerosurr.config import load_rans
+    from aerosurr.data.splits import run_number
+    from aerosurr.data.validate import read_geo_refs
+    from aerosurr.rans.batch import Slot, case_dir, is_done, run_queue
+    from aerosurr.rans.case import write_case
+    from aerosurr.rans.run import cpu_count_ok, openfoam_env, parse_cpus, read_force_mom, run_case
+
+    paths, data = state.paths(), state.data()
+    cfg = load_rans(config, state.config_dir)
+    if iterations is not None:
+        cfg = cfg.model_copy(
+            update={"solver": cfg.solver.model_copy(update={"iterations": iterations})}
+        )
+    root = out or paths.rans / "batch"
+    slot_list = []
+    for part in slots.split(";"):
+        name, _, cpus = part.partition("=")
+        slot_list.append(Slot(name.strip(), parse_cpus(cpus)))
+        cpu_count_ok(slot_list[-1].cpus)
+    run_list = [r for r in re.split(r"[,\s]+", runs_file.read_text()) if r]
+    setup_logging(paths.logs / "aero-rans", "batch")
+    log = logging.getLogger("aerosurr.rans")
+    env = openfoam_env()
+    todo = [r for r in run_list if not any(is_done(case_dir(root, r, preset, len(s.cpus)))
+                                           for s in slot_list)]  # fmt: skip
+    log.info("batch: %d runs, %d done, %d to go; preset %s, %d iterations; slots %s",
+             len(run_list), len(run_list) - len(todo), len(todo), preset, cfg.solver.iterations,
+             {s.name: f"{len(s.cpus)} ranks" for s in slot_list})  # fmt: skip
+
+    def work(run: str, slot: Slot) -> bool:
+        n = run_number(run)
+        src = paths.data_raw / run
+        case = case_dir(root, run, preset, len(slot.cpus))
+        if case.exists() and not is_done(case):
+            import shutil
+
+            shutil.rmtree(case)  # a half-finished case: start it again cleanly
+        ref = read_geo_refs(src / f"geo_ref_{n}.csv").varying
+        write_case(case, cfg, preset, src / f"drivaer_{n}.stl", data.freestream, ref,
+                   len(slot.cpus))  # fmt: skip
+        fm = src / f"force_mom_{n}.csv"
+        res = run_case(case, slot.cpus, preset, cfg.solver.potential_init,
+                       cfg.solver.average_last, read_force_mom(fm), env,
+                       keep_volume=cfg.output.keep_volume)  # fmt: skip
+        return res.status == "done"
+
+    results = run_queue(todo, slot_list, work)
+    failed = [r for r, ok in results.items() if not ok]
+    log.info("batch finished: %d ok, %d failed %s", len(results) - len(failed), len(failed), failed)
+    raise typer.Exit(1 if failed else 0)
+
+
+@rans_app.command("summary")
+def rans_summary(
+    cases: Annotated[list[Path], typer.Argument(help="Case dirs with aerosurr_run.json.")],
+) -> None:
+    """Markdown table of timings, cell counts and Cd/Cl against the HF reference."""
+    from aerosurr.rans.run import RESULT_NAME
+
+    typer.echo("| Case | Ranks | CPUs | Status | Cells | Mesh (min) | Solve (min) | s/iter | "
+               "Total (min) | Cd | Cd HF | ΔCd (counts) | Cl | Cl HF |")  # fmt: skip
+    typer.echo("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    for c in cases:
+        r = json.loads((c / RESULT_NAME).read_text())
+        st = r["steps"]
+        mesh = sum(v for k, v in st.items() if k not in ("potentialFoam", "simpleFoam")) / 60
+        solve = (st.get("potentialFoam", 0) + st.get("simpleFoam", 0)) / 60
+        cd, cl = r["coeffs"].get("Cd"), r["coeffs"].get("Cl")
+        cd_hf, cl_hf = r["reference"].get("Cd"), r["reference"].get("Cl")
+        dcd = f"{(cd - cd_hf) * 1000:+.0f}" if cd is not None and cd_hf is not None else "-"
+
+        def f(x: float | None, fmt: str) -> str:
+            return format(x, fmt) if x is not None else "-"
+
+        typer.echo(
+            f"| {r['case']} | {r['n_ranks']} | {r['cpus'] if len(r['cpus']) < 20 else '…'} | "
+            f"{r['status']} | {f(r['cells'], ',')} | {mesh:.1f} | {solve:.1f} | "
+            f"{f(r['s_per_iter'], '.3f')} | {r['total_s'] / 60:.1f} | {f(cd, '.4f')} | "
+            f"{f(cd_hf, '.4f')} | {dcd} | {f(cl, '.4f')} | {f(cl_hf, '.4f')} |"
+        )
+
+
+# --------------------------------------------------------------------------- train / eval
+
+
+def _cuda_device(gpu: int) -> torch.device:
+    import os
+
+    import torch
+
+    if "CUDA_VISIBLE_DEVICES" not in os.environ:
+        typer.echo("set CUDA_VISIBLE_DEVICES explicitly (SPEC §2: GPU 0 main, GPU 1 ensembles)",
+                   err=True)  # fmt: skip
+        raise typer.Exit(2)
+    if not torch.cuda.is_available():
+        typer.echo("CUDA not available", err=True)
+        raise typer.Exit(2)
+    return torch.device("cuda", gpu)
+
+
+@train_app.command("run")
+def train_run(
+    model: Annotated[str, typer.Option(help="configs/model/<model>.yaml")] = "transolver",
+    train: Annotated[str, typer.Option(help="configs/train/<train>.yaml")] = "main",
+    name: Annotated[str | None, typer.Option(help="Run name (dir under paths.runs).")] = None,
+    gpu: Annotated[int, typer.Option(help="Index among CUDA_VISIBLE_DEVICES.")] = 0,
+    cpus: Annotated[str | None, typer.Option(help="Pin this process to these CPUs.")] = None,
+    session: Annotated[str, typer.Option(help="Log dir name under paths.logs.")] = "aero-train0",
+) -> None:
+    """Train a surface model on the compact store; checkpoints and metrics in paths.runs/<name>."""
+    import os
+    from datetime import datetime
+
+    from aerosurr.config import load_model, load_train
+    from aerosurr.data.splits import load_manifest
+    from aerosurr.data.store import STATS
+    from aerosurr.rans.run import parse_cpus
+
+    paths, data = state.paths(), state.data()
+    configure_runtime(paths.workspace)
+    if cpus:
+        os.sched_setaffinity(0, parse_cpus(cpus))
+    device = _cuda_device(gpu)
+    from aerosurr.train.loop import train as train_loop
+
+    mc, tc = load_model(model, state.config_dir), load_train(train, state.config_dir)
+    name = name or f"{model}_{train}_{datetime.now():%Y%m%dT%H%M}"
+    store = paths.data_store / data.store.version
+    stats = json.loads((store / STATS).read_text())
+    setup_logging(paths.logs / session, name)
+    manifest = load_manifest(paths.data_raw / "splits/manifest.json")
+    s = train_loop(name, mc, tc, manifest, store, paths.data_raw, stats, paths.runs / name, device)
+    typer.echo(json.dumps(s.__dict__, indent=2, default=str))
+
+
+@eval_app.command("run")
+def eval_run(
+    run_dir: Annotated[Path, typer.Argument(help="A training run directory.")],
+    split: Annotated[str, typer.Option(help="full_test or full_val.")] = "full_test",
+    checkpoint: Annotated[str, typer.Option(help="best.pt or last.pt")] = "best.pt",
+    gpu: Annotated[int, typer.Option(help="Index among CUDA_VISIBLE_DEVICES.")] = 0,
+) -> None:
+    """Full-mesh field and force errors of a trained model on a split -> <run>/<split>.json."""
+    import torch
+
+    from aerosurr.config import ModelConfig, TrainConfig
+    from aerosurr.data.splits import load_manifest
+    from aerosurr.models.surface import build_model
+    from aerosurr.train.data import Normaliser
+    from aerosurr.train.loop import evaluate_full
+
+    paths, data = state.paths(), state.data()
+    configure_runtime(paths.workspace)
+    device = _cuda_device(gpu)
+    cfg = json.loads((run_dir / "config.json").read_text())
+    mc, tc = ModelConfig.model_validate(cfg["model"]), TrainConfig.model_validate(cfg["train"])
+    model = build_model(mc).to(device)
+    model.load_state_dict(torch.load(run_dir / checkpoint, map_location=device))
+    model.eval()
+    fwd = torch.compile(model) if tc.compile else model
+    runs = load_manifest(paths.data_raw / "splits/manifest.json")[split]
+    store = paths.data_store / data.store.version
+    res = evaluate_full(fwd, Normaliser.from_stats(cfg["stats"]), store, paths.data_raw, runs,
+                        tc.points, device, tc.bf16)  # fmt: skip
+    (run_dir / f"{split}.json").write_text(json.dumps(res, indent=1))
+    typer.echo(json.dumps({k: v for k, v in res.items() if k != "per_run"}, indent=2))
 
 
 if __name__ == "__main__":

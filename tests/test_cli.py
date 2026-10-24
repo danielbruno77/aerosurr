@@ -102,3 +102,31 @@ def test_download_min_free_gb_override(monkeypatch: pytest.MonkeyPatch) -> None:
     assert res.exit_code == 0, res.output
     assert seen == {"min_free_gb": 5.0}
     assert runner.invoke(app, ["data", "download", "--min-free-gb", "-1"]).exit_code != 0
+
+
+def test_rans_setup_and_summary(tmp_path: Path) -> None:
+    """`rans setup` builds a case from run files under AEROSURR_DATA; `summary` tabulates."""
+    from .test_rans import GEO_REF, ascii_stl
+
+    run = tmp_path / "ws" / "raw" / "run_9"
+    run.mkdir(parents=True)
+    tri = np.array([[[0, 0, -0.33], [1, 0, -0.33], [0, 1, 0.5]]])
+    ascii_stl(run / "drivaer_9.stl", {"BodyA": tri})
+    (run / "geo_ref_9.csv").write_text(GEO_REF)
+    case = tmp_path / "case"
+    args = ["rans", "setup", "run_9", "--preset", "coarse", "--ranks", "4"]
+    res = runner.invoke(app, [*args, "--iterations", "20", "--out", str(case)])
+    assert res.exit_code == 0, res.output
+    meta = json.loads((case / "aerosurr_case.json").read_text())
+    assert meta["ranks"] == 4 and meta["iterations"] == 20
+    assert "endTime         20;" in (case / "system/controlDict").read_text()
+    assert runner.invoke(app, [*args, "--out", str(case)]).exit_code == 2  # refuses to overwrite
+    assert runner.invoke(app, ["rans", "run", str(case), "--cpus", "0-7"]).exit_code != 0
+    (case / "aerosurr_run.json").write_text(json.dumps({
+        "case": "case", "n_ranks": 4, "cpus": "0-3", "status": "done", "cells": 1000,
+        "steps": {"snappyHexMesh": 60.0, "simpleFoam": 120.0}, "total_s": 180.0,
+        "s_per_iter": 0.5, "coeffs": {"Cd": 0.31, "Cl": 0.05},
+        "reference": {"Cd": 0.3035, "Cl": 0.0677},
+    }))  # fmt: skip
+    out = runner.invoke(app, ["rans", "summary", str(case)])
+    assert out.exit_code == 0 and "| +7 |" in out.output and "| 3.0 |" in out.output

@@ -1,0 +1,5 @@
+# In-house PointNet-style baseline: per-point MLP + max-pooled global geometry code.
+kind: pointnet
+pn_local: [128, 256]
+pn_global: 512
+pn_head: [256, 128]

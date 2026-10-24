@@ -1,0 +1,46 @@
+# Coarse low-fidelity RANS of a DrivAerML geometry (SPEC §5.3): snappyHexMesh + simpleFoam,
+# k-omega SST with wall functions, steady. Setup follows the HRLES runs where it matters
+# (Ashton et al. 2408.11969, App. C): U_inf = 38.889 m/s from data.yaml, p = 0 at the
+# outlet, symmetry top and sides, slip ground upstream of x_bl and a stationary no-slip
+# ground downstream, static wheels. The tunnel is smaller than the paper's (outlet at
+# x = 30 m, not 80 m) to fit the per-case budget: blockage ~1 %.
+domain:
+  x_min: -15.0
+  x_max: 30.0
+  y_half: 10.0
+  height: 10.0
+  ground_z: -0.3176          # HF VTP z_min and forcesCoR z; the STL tyres reach 2 mm below
+  x_bl: -2.339               # paper App. C
+  location_in_mesh: [-10.0123, 5.0321, 4.9874]
+
+# Levels are relative to base_cell: L2 = 8 cm, L3 = 4 cm, L4 = 2 cm, L5 = 1 cm, L6 = 5 mm.
+mesh_presets:
+  coarse:
+    base_cell: 0.32
+    surface_levels: [4, 5]
+    feature_level: 5
+    boxes:
+      - {name: wake, min: [-1.5, -2.0, -0.5], max: [12.0, 2.0, 2.2], level: 2}
+      - {name: near, min: [-1.2, -1.4, -0.5], max: [6.5, 1.4, 1.7], level: 3}
+  medium:
+    base_cell: 0.32
+    surface_levels: [5, 5]
+    feature_level: 6
+    boxes:
+      - {name: wake, min: [-1.5, -2.0, -0.5], max: [12.0, 2.0, 2.2], level: 2}
+      - {name: near, min: [-1.2, -1.4, -0.5], max: [6.5, 1.4, 1.7], level: 3}
+      - {name: close, min: [-0.95, -1.12, -0.5], max: [4.6, 1.12, 1.35], level: 4}
+  fine:
+    base_cell: 0.32
+    surface_levels: [5, 6]
+    feature_level: 6
+    boxes:
+      - {name: wake, min: [-1.5, -2.2, -0.5], max: [14.0, 2.2, 2.4], level: 3}
+      - {name: near, min: [-1.0, -1.25, -0.5], max: [5.5, 1.25, 1.5], level: 4}
+
+solver:
+  iterations: 1500
+  average_last: 300          # force coefficients are averaged over the last 300 iterations
+  turbulence_intensity: 0.005
+  viscosity_ratio: 10.0
+  potential_init: true

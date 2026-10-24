@@ -110,12 +110,24 @@ class DownloadConfig(_Strict):
     paths_info_batch: int = Field(default=200, ge=1, le=1000)
 
 
+class StoreConfig(_Strict):
+    version: str = Field(default="v1", pattern=r"^v\d+$")
+    pool_size: int = Field(default=500_000, gt=0, description="training cells kept per run")
+    seed: int = 0
+    full_splits: list[str] = Field(
+        default_factory=lambda: ["full_val", "full_test"],
+        description="runs of these splits also keep every native cell (evaluation)",
+    )
+    stats_split: str = Field(default="full_train", description="normalisation statistics")
+
+
 class DataConfig(_Strict):
     source: DatasetSource
     n_runs: int = Field(gt=0)
     fields: SurfaceFields
     freestream: Freestream
     download: DownloadConfig
+    store: StoreConfig = StoreConfig()
 
     @field_validator("download")
     @classmethod
@@ -123,6 +135,102 @@ class DataConfig(_Strict):
         if len(set(v.priority)) != len(v.priority):
             raise ValueError("download.priority has duplicate split names")
         return v
+
+
+# --------------------------------------------------------------------------- rans/*.yaml
+
+Vec3 = tuple[float, float, float]
+
+
+class RansDomain(_Strict):
+    """Virtual wind tunnel (SPEC §5.3). x streamwise, z up, ground at `ground_z`."""
+
+    x_min: float = Field(lt=0)
+    x_max: float = Field(gt=0)
+    y_half: float = Field(gt=0)
+    height: float = Field(gt=0, description="top boundary height above the ground")
+    ground_z: float = Field(description="ground plane z (HF VTP z_min = forcesCoR z)")
+    x_bl: float = Field(description="ground is slip upstream of this x, a no-slip wall downstream")
+    location_in_mesh: Vec3
+
+
+class RansBox(_Strict):
+    name: str = Field(pattern=r"^[A-Za-z]\w*$")
+    min: Vec3
+    max: Vec3
+    level: int = Field(ge=0, le=10)
+
+
+class RansMesh(_Strict):
+    base_cell: float = Field(gt=0, description="blockMesh cell size (m)")
+    surface_levels: tuple[int, int]
+    feature_level: int = Field(ge=0, le=10)
+    feature_angle: float = Field(default=150.0, gt=0, le=180)
+    resolve_feature_angle: float = Field(default=30.0, gt=0, le=180)
+    n_cells_between_levels: int = Field(default=3, ge=1)
+    max_local_cells: int = Field(default=5_000_000, gt=0)
+    max_global_cells: int = Field(default=100_000_000, gt=0)
+    boxes: list[RansBox] = Field(default_factory=list)
+
+
+class RansSolver(_Strict):
+    iterations: int = Field(gt=0)
+    average_last: int = Field(gt=0, description="iterations averaged for force coefficients")
+    turbulence_intensity: float = Field(gt=0, lt=1)
+    viscosity_ratio: float = Field(gt=0, description="nut/nu at the inlet")
+    potential_init: bool = True
+
+
+class RansOutput(_Strict):
+    keep_volume: bool = Field(
+        default=False,
+        description="reconstruct and keep the volume mesh + final fields (~1 GB/case); "
+        "otherwise keep only the car surface, forces and logs",
+    )
+
+
+class RansConfig(_Strict):
+    domain: RansDomain
+    mesh_presets: dict[str, RansMesh] = Field(min_length=1)
+    solver: RansSolver
+    output: RansOutput = RansOutput()
+
+
+# --------------------------------------------------------------------------- model/, train/
+
+
+class ModelConfig(_Strict):
+    """Surface model (SPEC §5.2). Transolver variants come from NVIDIA PhysicsNeMo."""
+
+    kind: Literal["transolver", "geotransolver", "pointnet"]
+    n_layers: int = Field(default=8, ge=1)
+    n_hidden: int = Field(default=256, ge=8)
+    n_head: int = Field(default=8, ge=1)
+    slice_num: int = Field(default=64, ge=1)
+    mlp_ratio: int = Field(default=4, ge=1)
+    dropout: float = Field(default=0.0, ge=0, lt=1)
+    heteroscedastic: bool = Field(default=False, description="predict mean + log-variance")
+    pn_local: list[int] = Field(default_factory=lambda: [128, 256])
+    pn_global: int = 512
+    pn_head: list[int] = Field(default_factory=lambda: [256, 128])
+
+
+class TrainConfig(_Strict):
+    split: str = Field(default="full", description="uses <split>_train and <split>_val")
+    epochs: int = Field(gt=0)
+    points: int = Field(default=200_000, gt=0, description="cells sampled per car per step")
+    lr: float = Field(default=1e-3, gt=0)
+    weight_decay: float = Field(default=1e-4, ge=0)
+    warmup_epochs: int = Field(default=2, ge=0)
+    grad_clip: float = Field(default=1.0, gt=0)
+    seed: int = 0
+    compile: bool = True
+    bf16: bool = True
+    data_on_gpu: bool = True
+    eval_every: int = Field(default=5, gt=0, description="epochs between pool validations")
+    full_eval_every: int = Field(default=25, gt=0, description="epochs between full-mesh evals")
+    max_train_runs: int | None = Field(default=None, gt=0)
+    max_hours: float | None = Field(default=None, gt=0)
 
 
 # --------------------------------------------------------------------------- loader
@@ -158,3 +266,15 @@ def load_paths(cfg_dir: Path | None = None) -> PathsConfig:
 
 def load_data(cfg_dir: Path | None = None) -> DataConfig:
     return DataConfig.model_validate(_read_yaml(config_dir(cfg_dir) / "data.yaml"))
+
+
+def load_rans(name: str = "coarse", cfg_dir: Path | None = None) -> RansConfig:
+    return RansConfig.model_validate(_read_yaml(config_dir(cfg_dir) / "rans" / f"{name}.yaml"))
+
+
+def load_model(name: str, cfg_dir: Path | None = None) -> ModelConfig:
+    return ModelConfig.model_validate(_read_yaml(config_dir(cfg_dir) / "model" / f"{name}.yaml"))
+
+
+def load_train(name: str, cfg_dir: Path | None = None) -> TrainConfig:
+    return TrainConfig.model_validate(_read_yaml(config_dir(cfg_dir) / "train" / f"{name}.yaml"))
