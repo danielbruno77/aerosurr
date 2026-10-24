@@ -832,8 +832,10 @@ def eval_run(
     split: Annotated[str, typer.Option(help="full_test or full_val.")] = "full_test",
     checkpoint: Annotated[str, typer.Option(help="best.pt or last.pt")] = "best.pt",
     gpu: Annotated[int, typer.Option(help="Index among CUDA_VISIBLE_DEVICES.")] = 0,
+    runs: Annotated[str | None, typer.Option(help="Comma-separated subset of the split.")] = None,
+    tag: Annotated[str | None, typer.Option(help="Output name (default: the split).")] = None,
 ) -> None:
-    """Full-mesh field and force errors of a trained model on a split -> <run>/<split>.json."""
+    """Full-mesh field and force errors of a trained model on a split -> <run>/<tag>.json."""
     import torch
 
     from aerosurr.config import ModelConfig, TrainConfig
@@ -851,12 +853,15 @@ def eval_run(
     model.load_state_dict(torch.load(run_dir / checkpoint, map_location=device))
     model.eval()
     fwd = torch.compile(model) if tc.compile else model
-    runs = load_manifest(paths.data_raw / "splits/manifest.json")[split]
+    run_list = load_manifest(paths.data_raw / "splits/manifest.json")[split]
+    if runs:
+        wanted = set(runs.split(","))
+        run_list = [r for r in run_list if r in wanted]
     store = paths.data_store / data.store.version
-    res = evaluate_full(fwd, Normaliser.from_stats(cfg["stats"]), store, paths.data_raw, runs,
+    res = evaluate_full(fwd, Normaliser.from_stats(cfg["stats"]), store, paths.data_raw, run_list,
                         tc.points, device, tc.bf16, mc.lf_inputs, mc.predict_residual,
                         mc.heteroscedastic)  # fmt: skip
-    (run_dir / f"{split}.json").write_text(json.dumps(res, indent=1))
+    (run_dir / f"{tag or split}.json").write_text(json.dumps(res, indent=1))
     typer.echo(json.dumps({k: v for k, v in res.items() if k != "per_run"}, indent=2))
 
 
