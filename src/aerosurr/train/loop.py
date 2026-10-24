@@ -141,6 +141,7 @@ def evaluate_full(
     bf16: bool,
     lf_inputs: bool = False,
     residual: bool = False,
+    heteroscedastic: bool = False,
 ) -> dict[str, Any]:
     """Field errors on the native mesh and integrated-force errors, per run and averaged.
 
@@ -152,8 +153,8 @@ def evaluate_full(
     for r in runs:
         g = {k: torch.from_numpy(v).to(device) for k, v in load_group(store, r, "full").items()}
         lf = torch.from_numpy(load_lf(store, r, "full")).to(device) if lf_inputs else None
-        pred, _ = predict_tensor(model, norm, g["centres"], g["normals"], chunk, bf16, lf=lf,
-                                 residual=residual)  # fmt: skip
+        pred, _ = predict_tensor(model, norm, g["centres"], g["normals"], chunk, bf16,
+                                 heteroscedastic, lf=lf, residual=residual)  # fmt: skip
         true = torch.cat([g["cp"].float().reshape(-1, 1), g["cf"].float().reshape(-1, 3)], 1)
         a_in = -g["normals"].double() * g["areas"].double()[:, None]
         ref = read_geo_refs(raw / r / f"geo_ref_{run_number(r)}.csv").varying
@@ -284,7 +285,7 @@ def train(
         if epoch % tc.full_eval_every == 0:
             model.eval()
             full = evaluate_full(
-                fwd, norm, store, raw, val_runs, tc.points, device, tc.bf16, lf, res
+                fwd, norm, store, raw, val_runs, tc.points, device, tc.bf16, lf, res, hetero
             )
             rec["full_val"] = {k: v for k, v in full.items() if k != "per_run"}
         torch.save(model.state_dict(), out_dir / "last.pt")
@@ -299,7 +300,9 @@ def train(
     metrics.close()
     model.load_state_dict(torch.load(out_dir / "best.pt", map_location=device))
     model.eval()
-    full = evaluate_full(fwd, norm, store, raw, val_runs, tc.points, device, tc.bf16, lf, res)
+    full = evaluate_full(
+        fwd, norm, store, raw, val_runs, tc.points, device, tc.bf16, lf, res, hetero
+    )
     (out_dir / "full_val.json").write_text(json.dumps(full, indent=1))
     summary = TrainSummary(name, epoch, step, (time.time() - t0) / 3600, best_epoch, best_val,
                            {k: v for k, v in full.items() if k != "per_run"})  # fmt: skip

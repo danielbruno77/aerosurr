@@ -159,3 +159,50 @@ def test_mf_residual_training(
     assert np.isfinite(full["rel_l2"]["cp"])
     with pytest.raises(ValueError, match="needs lf_inputs"):
         ModelConfig(kind="pointnet", predict_residual=True)  # type: ignore[arg-type]
+
+
+def test_ensemble_end_to_end(tiny: tuple[Path, Path, dict[str, list[str]]], tmp_path: Path) -> None:
+    from aerosurr.data.store import StoreEntry, save_index
+    from aerosurr.eval.ensemble import evaluate_ensemble
+    from aerosurr.models.surface import build_model
+
+    store, raw, m = tiny
+    coeffs = {"varying": {"cd": 0.3, "cl": 0.1}, "constant": {"cd": 0.3, "cl": 0.1}}
+    save_index(store, {"run_4": StoreEntry("run_4", N_CELLS, POOL, True, "run_4.npz", 0.0,
+                                           coeffs, coeffs, True)}, {})  # fmt: skip
+    stats = compute_stats(store, m["full_train"])
+    mc = ModelConfig(kind="pointnet", heteroscedastic=True)  # type: ignore[arg-type]
+    tc = TrainConfig(
+        epochs=1,
+        points=64,
+        compile=False,
+        bf16=False,
+        data_on_gpu=False,
+        eval_every=1,
+        full_eval_every=1,
+        warmup_epochs=0,
+    )  # periodic full eval too
+    members = []
+    for seed in (0, 1):
+        out = tmp_path / f"m{seed}"
+        train(f"m{seed}", mc, tc.model_copy(update={"seed": seed}), m, store, raw, stats, out,
+              torch.device("cpu"))  # fmt: skip
+        model = build_model(mc)
+        model.load_state_dict(torch.load(out / "best.pt"))
+        members.append((model.eval(), mc))
+    res = evaluate_ensemble(
+        members,
+        Normaliser.from_stats(stats),
+        store,
+        raw,
+        ["run_4"],
+        ["run_4"],
+        64,
+        False,
+        torch.device("cpu"),
+        sample_per_run=50,
+    )
+    assert res["members"] == 2 and 0.0 < res["aleatoric_fraction"] <= 1.0
+    for q in ("0.5", "0.9", "0.95"):
+        assert 0.0 <= res["coverage"][q]["cp"] <= 1.0
+    assert res["temperature"]["fields"]["cp"] > 0 and np.isfinite(res["cd_mae_counts"])

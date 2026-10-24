@@ -667,6 +667,9 @@ def train_run(
     gpu: Annotated[int, typer.Option(help="Index among CUDA_VISIBLE_DEVICES.")] = 0,
     cpus: Annotated[str | None, typer.Option(help="Pin this process to these CPUs.")] = None,
     session: Annotated[str, typer.Option(help="Log dir name under paths.logs.")] = "aero-train0",
+    seed: Annotated[
+        int | None, typer.Option(help="Override train.seed (ensemble members).")
+    ] = None,
 ) -> None:
     """Train a surface model on the compact store; checkpoints and metrics in paths.runs/<name>."""
     import os
@@ -685,6 +688,8 @@ def train_run(
     from aerosurr.train.loop import train as train_loop
 
     mc, tc = load_model(model, state.config_dir), load_train(train, state.config_dir)
+    if seed is not None:
+        tc = tc.model_copy(update={"seed": seed})
     name = name or f"{model}_{train}_{datetime.now():%Y%m%dT%H%M}"
     store = paths.data_store / data.store.version
     stats = json.loads((store / STATS).read_text())
@@ -738,6 +743,59 @@ def eval_lf(
     typer.echo(json.dumps({k: v for k, v in out.items() if k != "per_run"}, indent=2))
 
 
+@eval_app.command("ensemble")
+def eval_ensemble(
+    run_dirs: Annotated[list[Path], typer.Argument(help="Member run directories.")],
+    name: Annotated[str, typer.Option(help="Output dir under paths.runs.")],
+    calib: Annotated[str, typer.Option(help="Calibration split.")] = "full_val",
+    split: Annotated[str, typer.Option(help="Report split.")] = "full_test",
+    gpu: Annotated[int, typer.Option(help="Index among CUDA_VISIBLE_DEVICES.")] = 0,
+) -> None:
+    """Deep-ensemble uncertainty: calibrate on `calib`, coverage/NLL/Spearman on `split`."""
+    import torch
+
+    from aerosurr.config import ModelConfig, TrainConfig
+    from aerosurr.data.splits import load_manifest
+    from aerosurr.eval.ensemble import evaluate_ensemble
+    from aerosurr.models.surface import build_model
+    from aerosurr.train.data import Normaliser
+
+    paths, data = state.paths(), state.data()
+    configure_runtime(paths.workspace)
+    device = _cuda_device(gpu)
+    members = []
+    stats = None
+    tc = None
+    for d in run_dirs:
+        cfg = json.loads((d / "config.json").read_text())
+        mc, tc = ModelConfig.model_validate(cfg["model"]), TrainConfig.model_validate(cfg["train"])
+        m = build_model(mc).to(device)
+        m.load_state_dict(torch.load(d / "best.pt", map_location=device))
+        m.eval()
+        members.append((torch.compile(m) if tc.compile else m, mc))
+        stats = stats or cfg["stats"]
+    assert tc is not None and stats is not None
+    manifest = load_manifest(paths.data_raw / "splits/manifest.json")
+    store = paths.data_store / data.store.version
+    norm = Normaliser.from_stats(stats)
+    res = evaluate_ensemble(
+        members,
+        norm,
+        store,
+        paths.data_raw,
+        manifest[calib],
+        manifest[split],
+        tc.points,
+        tc.bf16,
+        device,
+    )
+    out = paths.runs / name
+    out.mkdir(parents=True, exist_ok=True)
+    res["member_dirs"] = [str(d) for d in run_dirs]
+    (out / f"ensemble_{split}.json").write_text(json.dumps(res, indent=1))
+    typer.echo(json.dumps({k: v for k, v in res.items() if k != "per_run"}, indent=2))
+
+
 @eval_app.command("run")
 def eval_run(
     run_dir: Annotated[Path, typer.Argument(help="A training run directory.")],
@@ -766,7 +824,8 @@ def eval_run(
     runs = load_manifest(paths.data_raw / "splits/manifest.json")[split]
     store = paths.data_store / data.store.version
     res = evaluate_full(fwd, Normaliser.from_stats(cfg["stats"]), store, paths.data_raw, runs,
-                        tc.points, device, tc.bf16, mc.lf_inputs, mc.predict_residual)  # fmt: skip
+                        tc.points, device, tc.bf16, mc.lf_inputs, mc.predict_residual,
+                        mc.heteroscedastic)  # fmt: skip
     (run_dir / f"{split}.json").write_text(json.dumps(res, indent=1))
     typer.echo(json.dumps({k: v for k, v in res.items() if k != "per_run"}, indent=2))
 

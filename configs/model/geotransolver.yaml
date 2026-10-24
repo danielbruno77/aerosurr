@@ -1,0 +1,10 @@
+# PhysicsNeMo GeoTransolver (physicsnemo.models.geotransolver): the Transolver alternative
+# for the main model, same width/depth/slices; positions also passed as `geometry`.
+kind: geotransolver
+n_layers: 8
+n_hidden: 256
+n_head: 8
+slice_num: 64
+mlp_ratio: 4
+dropout: 0.0
+heteroscedastic: false
