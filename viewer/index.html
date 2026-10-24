@@ -1,0 +1,396 @@
+<title>aerosurr Surface Viewer</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: one-screen instrument. 3D stage fills the view; a control rail sits left on
+   desktop and stacks below the stage on phones. Colours are tokens for both themes. */
+:root {
+  --bg: #eef1f5;          /* rail */
+  --stage: #dfe4ec;       /* 3D canvas background */
+  --fg: #16202e;
+  --muted: #5a6678;
+  --line: #c9d0db;
+  --accent: #2456a6;      /* cobalt: selection, focus */
+  --accent-ink: #ffffff;
+  --good: #1f7a4d;
+  --warn: #a86a00;
+  --bad: #b3261e;
+  --chip: #ffffff;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
+  --font-body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --rail-w: 340px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121820; --stage: #1b232e; --fg: #e4e9f0; --muted: #94a0b2; --line: #2c3746;
+    --accent: #7fa8ec; --accent-ink: #0d1520; --good: #5cc28e; --warn: #e3a440; --bad: #f0857c;
+    --chip: #1b232e; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121820; --stage: #1b232e; --fg: #e4e9f0; --muted: #94a0b2; --line: #2c3746;
+  --accent: #7fa8ec; --accent-ink: #0d1520; --good: #5cc28e; --warn: #e3a440; --bad: #f0857c;
+  --chip: #1b232e; color-scheme: dark;
+}
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 14px; }
+.app { display: grid; grid-template-columns: var(--rail-w) minmax(0, 1fr); height: 100%; }
+.rail {
+  display: flex; flex-direction: column; gap: 18px; overflow-y: auto; min-width: 0;
+  padding-block: 18px 16px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: 16px;
+  border-right: 1px solid var(--line);
+}
+.stage { position: relative; min-width: 0; background: var(--stage); }
+.stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+h1 { font-family: var(--font-display); font-weight: 600; font-size: 22px; letter-spacing: 0.01em; margin: 0; text-wrap: balance; }
+.sub { color: var(--muted); margin: 4px 0 0; line-height: 1.45; }
+.label { font-family: var(--font-display); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 8px; }
+section { min-width: 0; }
+.cars { display: grid; gap: 4px; }
+.car {
+  display: grid; grid-template-columns: 4.6em 1fr auto; align-items: baseline; gap: 8px;
+  width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer;
+  background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 7px 9px;
+}
+.car:hover { background: var(--chip); border-color: var(--line); }
+.car[aria-pressed="true"] { background: var(--chip); border-color: var(--accent); }
+.car .id { font-family: var(--font-data); font-weight: 500; }
+.car .cd { font-family: var(--font-data); font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12.5px; }
+.delta { font-family: var(--font-data); font-variant-numeric: tabular-nums; font-size: 12px; padding: 1px 6px; border-radius: 999px; border: 1px solid currentColor; }
+.delta.good { color: var(--good); } .delta.warn { color: var(--warn); } .delta.bad { color: var(--bad); }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg button, .views button {
+  font: inherit; font-size: 13px; color: var(--fg); background: var(--chip); cursor: pointer;
+  border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px;
+}
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.seg button:disabled { opacity: 0.45; cursor: not-allowed; }
+.views { display: flex; flex-wrap: wrap; gap: 6px; }
+select { font: inherit; color: var(--fg); background: var(--chip); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.colorbar { display: grid; gap: 4px; }
+.colorbar canvas { width: 100%; height: 14px; border-radius: 3px; border: 1px solid var(--line); }
+.ticks { display: flex; justify-content: space-between; font-family: var(--font-data); font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.facts { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-family: var(--font-data); font-size: 12.5px; font-variant-numeric: tabular-nums; margin: 0; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; }
+.note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0; }
+.note a { color: var(--accent); }
+.hud {
+  position: absolute; left: max(12px, env(safe-area-inset-left, 0px)); bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  font-family: var(--font-data); font-size: 12.5px; font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--bg) 88%, transparent); border: 1px solid var(--line);
+  border-radius: 6px; padding: 6px 9px; pointer-events: none;
+}
+.title-hud {
+  position: absolute; top: 12px; left: 12px; right: max(12px, env(safe-area-inset-right, 0px));
+  font-family: var(--font-display); font-weight: 500; font-size: 15px; pointer-events: none;
+}
+.title-hud span { color: var(--muted); font-family: var(--font-body); font-size: 13px; margin-left: 8px; }
+.loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-family: var(--font-data); pointer-events: none; }
+@media (max-width: 760px) {
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: 56vh auto; height: auto; }
+  .stage { order: -1; height: 56vh; }
+  .rail { border-right: 0; border-top: 1px solid var(--line); overflow: visible; padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="app">
+  <aside class="rail">
+    <header>
+      <h1>aerosurr</h1>
+      <p class="sub">Time-averaged surface fields on DrivAerML test cars: HRLES reference against the PhysicsNeMo Transolver surrogate, on the native mesh decimated to ~70k vertices.</p>
+    </header>
+
+    <section aria-labelledby="l-cars">
+      <p class="label" id="l-cars">Test car · Cd HRLES → model</p>
+      <div class="cars" id="cars"></div>
+    </section>
+
+    <section aria-labelledby="l-field">
+      <p class="label" id="l-field">Field</p>
+      <div class="seg" id="fields"></div>
+    </section>
+
+    <section aria-labelledby="l-scale">
+      <p class="label" id="l-scale">Colour scale</p>
+      <div class="colorbar">
+        <canvas id="bar" width="512" height="14" aria-hidden="true"></canvas>
+        <div class="ticks" id="ticks"></div>
+      </div>
+      <p style="margin:8px 0 0"><label for="cmap" class="note" style="margin-right:6px">Map</label>
+        <select id="cmap">
+          <option value="auto">Per field</option>
+          <option value="coolwarm">Cool–warm</option>
+          <option value="turbo">Turbo</option>
+          <option value="viridis">Viridis</option>
+        </select></p>
+    </section>
+
+    <section aria-labelledby="l-view">
+      <p class="label" id="l-view">View</p>
+      <div class="views" id="views"></div>
+    </section>
+
+    <section aria-labelledby="l-car">
+      <p class="label" id="l-car">Selected car</p>
+      <dl class="facts" id="facts"></dl>
+    </section>
+
+    <p class="note" id="provenance"></p>
+    <p class="note">Data: DrivAerML, Ashton et al. 2024 (<a href="https://arxiv.org/abs/2408.11969" target="_blank" rel="noopener">arXiv:2408.11969</a>), CC BY-SA 4.0; these derived fields are shared under the same licence. 1 drag count = 0.001 Cd.</p>
+  </aside>
+
+  <main class="stage" id="stage">
+    <div class="title-hud" id="titlehud"></div>
+    <div class="loading" id="loading">Loading…</div>
+    <div class="hud" id="hud">Hover the car for values · drag to orbit · scroll to zoom</div>
+  </main>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+const FIELDS = [
+  { key: "cp_true", label: "Cp · HRLES", unit: "Cp", kind: "div" },
+  { key: "cp_pred", label: "Cp · model", unit: "Cp", kind: "div" },
+  { key: "cp_err", label: "Cp error", unit: "ΔCp", kind: "div" },
+  { key: "cf_true", label: "|Cf| · HRLES", unit: "|Cf|", kind: "seq" },
+  { key: "cf_pred", label: "|Cf| · model", unit: "|Cf|", kind: "seq" },
+  { key: "cp_sigma", label: "σ(Cp)", unit: "σ", kind: "seq" },
+];
+const VIEWS = { "Side": [1.6, -9.2, 0.8], "Top": [1.6, 0.0001, 9.5], "Underbody": [1.6, 0.0001, -8.5],
+                "Front ¾": [-4.6, -5.2, 2.2], "Rear ¾": [7.8, -5.0, 2.4] };
+const TARGET = new THREE.Vector3(1.6, 0, 0.45);
+const GROUND_Z = -0.3176;
+
+// ---- colour maps (value t in [0, 1] -> [r, g, b] in [0, 1])
+function ramp(stops) {
+  return t => {
+    t = Math.min(1, Math.max(0, t));
+    const x = t * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(x)), f = x - i;
+    const a = stops[i], b = stops[i + 1];
+    return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+  };
+}
+const hex = h => [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255];
+const CMAPS = {
+  coolwarm: ramp(["#3b4cc0", "#6788ee", "#9abbff", "#c9d7f0", "#edd1c2", "#f7a889", "#e26952", "#b40426"].map(hex)),
+  viridis: ramp(["#440154", "#482878", "#3e4a89", "#31688e", "#26828e", "#1f9e89", "#35b779", "#6ece58", "#b5de2b", "#fde725"].map(hex)),
+  turbo: t => { // Google's polynomial approximation of Turbo
+    t = Math.min(1, Math.max(0, t));
+    const r = 0.13572138 + t * (4.61539260 + t * (-42.66032258 + t * (132.13108234 + t * (-152.94239396 + t * 59.28637943))));
+    const g = 0.09140261 + t * (2.19418839 + t * (4.84296658 + t * (-14.18503333 + t * (4.27729857 + t * 2.82956604))));
+    const b = 0.10667330 + t * (12.64194608 + t * (-60.58204836 + t * (110.36276771 + t * (-89.90310912 + t * 27.34824973))));
+    return [r, g, b].map(v => Math.min(1, Math.max(0, v)));
+  },
+};
+
+// ---- state
+const state = { cars: [], ranges: {}, car: null, field: "cp_true", cmap: "auto", cache: new Map() };
+const $ = id => document.getElementById(id);
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+// ---- three.js scene (z up, x streamwise)
+const stage = $("stage");
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+stage.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(32, 1, 0.05, 200);
+camera.up.set(0, 0, 1);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.copy(TARGET);
+controls.enableDamping = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f99, 1.9));
+const head = new THREE.DirectionalLight(0xffffff, 1.1);
+camera.add(head); head.position.set(0, 0, 1); scene.add(camera);
+const grid = new THREE.GridHelper(14, 28);
+grid.rotation.x = Math.PI / 2; grid.position.set(1.6, 0, GROUND_Z);
+scene.add(grid);
+const material = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+let mesh = null;
+
+function applyTheme() {
+  renderer.setClearColor(new THREE.Color(css("--stage") || "#dfe4ec"));
+  const line = new THREE.Color(css("--line") || "#c9d0db");
+  grid.material.vertexColors = false; grid.material.color = line;
+  grid.material.opacity = 0.7; grid.material.transparent = true; grid.material.needsUpdate = true;
+  render();
+}
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
+new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+function resize() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  renderer.setSize(w, h, false); camera.aspect = w / Math.max(1, h); camera.updateProjectionMatrix(); render();
+}
+new ResizeObserver(resize).observe(stage);
+let needs = true;
+function render() { needs = true; }
+controls.addEventListener("change", render);
+(function loop() { requestAnimationFrame(loop); if (controls.update() || needs) { renderer.render(scene, camera); needs = false; } })();
+
+function setView(name) {
+  const p = VIEWS[name]; camera.position.set(p[0], p[1], p[2]); controls.target.copy(TARGET); controls.update(); render();
+}
+
+// ---- data
+async function loadCar(c) {
+  if (state.cache.has(c.file)) return state.cache.get(c.file);
+  const res = await fetch("data/" + c.file);
+  let buf;
+  if (c.file.endsWith(".txt")) {  // base64 text: artifacts serve text, not raw binary
+    const bin = atob((await res.text()).trim());
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    buf = u8.buffer;
+  } else {
+    buf = await res.arrayBuffer();
+  }
+  const dv = new DataView(buf);
+  const hl = dv.getUint32(0, true);
+  const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, hl)));
+  let o = 4 + hl + ((4 - ((4 + hl) % 4)) % 4);
+  const nv = header.n_vertices, nt = header.n_triangles;
+  const pos = new Float32Array(buf, o, nv * 3); o += nv * 12;
+  const idx = new Uint32Array(buf, o, nt * 3); o += nt * 12;
+  const fields = {};
+  for (const f of header.fields) {
+    const q = new Uint16Array(buf, o, nv); o += nv * 2;
+    const v = new Float32Array(nv), s = (f.max - f.min) / 65535;
+    for (let i = 0; i < nv; i++) v[i] = f.min + q[i] * s;
+    fields[f.name] = v;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  geo.computeVertexNormals();
+  geo.setAttribute("color", new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
+  const entry = { header, geo, fields };
+  state.cache.set(c.file, entry);
+  return entry;
+}
+
+function fieldDef(key) { return FIELDS.find(f => f.key === key); }
+function cmapFor(key) {
+  if (state.cmap !== "auto") return CMAPS[state.cmap];
+  return fieldDef(key).kind === "div" ? CMAPS.coolwarm : CMAPS.viridis;
+}
+function rangeFor(key) { return state.ranges[key] || [0, 1]; }
+
+function colour(entry) {
+  const v = entry.fields[state.field]; if (!v) return;
+  const [lo, hi] = rangeFor(state.field), f = cmapFor(state.field), col = entry.geo.getAttribute("color");
+  const a = col.array, span = (hi - lo) || 1;
+  // Colour maps are sRGB; three.js expects linear vertex colours.
+  const lin = x => (x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4));
+  for (let i = 0; i < v.length; i++) { const c = f((v[i] - lo) / span); a[3 * i] = lin(c[0]); a[3 * i + 1] = lin(c[1]); a[3 * i + 2] = lin(c[2]); }
+  col.needsUpdate = true; render();
+}
+
+function drawBar() {
+  const cv = $("bar"), ctx = cv.getContext("2d"), f = cmapFor(state.field);
+  for (let x = 0; x < cv.width; x++) { const c = f(x / (cv.width - 1)); ctx.fillStyle = `rgb(${c.map(v => Math.round(v * 255)).join(",")})`; ctx.fillRect(x, 0, 1, cv.height); }
+  const [lo, hi] = rangeFor(state.field), n = 5, unit = fieldDef(state.field).unit;
+  const fmt = v => (Math.abs(hi - lo) < 0.05 ? v.toFixed(4) : v.toFixed(2));
+  $("ticks").innerHTML = Array.from({ length: n }, (_, i) => `<span>${fmt(lo + (hi - lo) * i / (n - 1))}</span>`).join("")
+    .replace(/<span>/, `<span title="${unit}">`);
+}
+
+function counts(c) { return (c.cd_pred - c.cd_true) * 1000; }
+function deltaClass(d) { const a = Math.abs(d); return a <= 5 ? "good" : a <= 10 ? "warn" : "bad"; }
+
+function renderCars() {
+  $("cars").innerHTML = state.cars.map((c, i) => {
+    const d = counts(c);
+    return `<button class="car" type="button" id="car-${c.run}" data-i="${i}" aria-pressed="${state.car === c}">
+      <span class="id">${c.run.replace("run_", "run ")}</span>
+      <span class="cd">${c.cd_true.toFixed(4)} → ${c.cd_pred.toFixed(4)}</span>
+      <span class="delta ${deltaClass(d)}">${d >= 0 ? "+" : "−"}${Math.abs(d).toFixed(1)}</span></button>`;
+  }).join("");
+  $("cars").querySelectorAll(".car").forEach(b => b.addEventListener("click", () => selectCar(state.cars[+b.dataset.i])));
+}
+
+function renderFields(entry) {
+  $("fields").innerHTML = FIELDS.map(f => `<button type="button" id="f-${f.key}" data-k="${f.key}" aria-pressed="${state.field === f.key}"
+    ${entry && !entry.fields[f.key] ? "disabled title=\"Arrives with the deep ensemble\"" : ""}>${f.label}</button>`).join("");
+  $("fields").querySelectorAll("button").forEach(b => b.addEventListener("click", () => { state.field = b.dataset.k; refresh(); }));
+}
+
+function renderFacts(c) {
+  const d = counts(c);
+  const rows = [["Run", c.run], ["Cd HRLES", c.cd_true.toFixed(4)], ["Cd model", c.cd_pred.toFixed(4)],
+    ["ΔCd", `${d >= 0 ? "+" : "−"}${Math.abs(d).toFixed(1)} counts`], ["Cl HRLES", c.cl_true.toFixed(4)], ["Cl model", c.cl_pred.toFixed(4)]];
+  if (c.cd_sigma != null) rows.push(["σ(Cd)", `${(c.cd_sigma * 1000).toFixed(1)} counts`]);
+  rows.push(["Mesh", `${c.n_vertices.toLocaleString()} vertices`]);
+  $("facts").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  $("titlehud").innerHTML = `${c.run}<span>${fieldDef(state.field).label}</span>`;
+}
+
+async function selectCar(c) {
+  state.car = c; renderCars(); $("loading").hidden = false;
+  const entry = await loadCar(c);
+  if (!entry.fields[state.field]) state.field = "cp_true";
+  if (mesh) scene.remove(mesh);
+  mesh = new THREE.Mesh(entry.geo, material); scene.add(mesh);
+  $("loading").hidden = true; refresh();
+}
+
+function refresh() {
+  const entry = state.car && state.cache.get(state.car.file);
+  renderFields(entry); drawBar();
+  if (entry) { colour(entry); renderFacts(state.car); }
+}
+
+// ---- hover readout
+const ray = new THREE.Raycaster(), ptr = new THREE.Vector2();
+let hoverPending = false, dragging = false;
+renderer.domElement.addEventListener("pointerdown", () => { dragging = true; });
+window.addEventListener("pointerup", () => { dragging = false; });
+renderer.domElement.addEventListener("pointermove", e => {
+  if (dragging || hoverPending || !mesh) return;
+  hoverPending = true;
+  requestAnimationFrame(() => {
+    hoverPending = false;
+    const r = renderer.domElement.getBoundingClientRect();
+    ptr.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(ptr, camera);
+    const hit = ray.intersectObject(mesh, false)[0];
+    if (!hit) return;
+    const entry = state.cache.get(state.car.file), v = entry.fields[state.field];
+    const i = [hit.face.a, hit.face.b, hit.face.c].reduce((best, k) => {
+      const p = new THREE.Vector3().fromBufferAttribute(entry.geo.getAttribute("position"), k);
+      const d = p.distanceToSquared(hit.point); return d < best[1] ? [k, d] : best;
+    }, [hit.face.a, Infinity])[0];
+    const f = fieldDef(state.field), val = v[i];
+    $("hud").textContent = `${f.unit} = ${Math.abs(val) < 0.05 ? val.toFixed(5) : val.toFixed(3)}   at x ${hit.point.x.toFixed(2)} m, y ${hit.point.y.toFixed(2)} m, z ${hit.point.z.toFixed(2)} m`;
+  });
+});
+
+// ---- boot
+$("cmap").addEventListener("change", e => { state.cmap = e.target.value; refresh(); });
+$("views").innerHTML = Object.keys(VIEWS).map(v => `<button type="button" id="v-${v.replace(/\W/g, "")}">${v}</button>`).join("");
+$("views").querySelectorAll("button").forEach(b => b.addEventListener("click", () => setView(b.textContent)));
+setView("Front ¾"); applyTheme(); resize();
+try {
+  const index = await (await fetch("data/index.json")).json();
+  state.cars = index.cars.map(c => ({ ...c }));
+  state.ranges = index.ranges;
+  const models = [...new Set(state.cars.map(c => c.model))].join(", ");
+  $("provenance").textContent = `Model checkpoint: ${models}. Field colour ranges are fixed across cars so they compare directly.`;
+  await selectCar(state.cars[0]);
+} catch (err) {
+  $("loading").textContent = "Could not load the car data (data/index.json). Re-export with `aerosurr viewer export`.";
+}
+</script>

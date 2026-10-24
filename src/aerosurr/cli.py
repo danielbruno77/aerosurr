@@ -30,6 +30,8 @@ train_app = typer.Typer(no_args_is_help=True, help="Train surface models (SPEC �
 app.add_typer(train_app, name="train")
 eval_app = typer.Typer(no_args_is_help=True, help="Evaluate trained models (SPEC §5.5).")
 app.add_typer(eval_app, name="eval")
+viewer_app = typer.Typer(no_args_is_help=True, help="Interactive 3D viewer data (SPEC §6).")
+app.add_typer(viewer_app, name="viewer")
 
 BEGIN, END = "<!-- BEGIN GENERATED", "<!-- END GENERATED -->"
 
@@ -828,6 +830,105 @@ def eval_run(
                         mc.heteroscedastic)  # fmt: skip
     (run_dir / f"{split}.json").write_text(json.dumps(res, indent=1))
     typer.echo(json.dumps({k: v for k, v in res.items() if k != "per_run"}, indent=2))
+
+
+# --------------------------------------------------------------------------- viewer
+
+#: Fixed colour-map ranges, so every car is shown on the same scale.
+VIEWER_RANGES = {
+    "cp_true": (-1.5, 1.0),
+    "cp_pred": (-1.5, 1.0),
+    "cp_err": (-0.3, 0.3),
+    "cf_true": (0.0, 0.008),
+    "cf_pred": (0.0, 0.008),
+    "cp_sigma": (0.0, 0.15),
+}
+
+
+@viewer_app.command("export")
+def viewer_export(
+    runs: Annotated[str, typer.Option(help="Comma-separated runs (test cars).")],
+    model_dir: Annotated[Path, typer.Option("--model", help="Main model run directory.")],
+    members: Annotated[
+        list[Path] | None, typer.Option("--member", help="Ensemble members (sigma).")
+    ] = None,
+    out: Annotated[
+        Path | None, typer.Option(help="Output dir (default ~/aero/viewer/data).")
+    ] = None,
+    cell: Annotated[float, typer.Option(help="Decimation cell size (m).")] = 0.025,
+    gpu: Annotated[int, typer.Option(help="Index among CUDA_VISIBLE_DEVICES.")] = 0,
+) -> None:
+    """Decimated cars with HF / predicted Cp, |Cf|, error and sigma for the three.js viewer."""
+    import numpy as np
+    import torch
+
+    from aerosurr.config import ModelConfig, TrainConfig
+    from aerosurr.data.splits import run_number
+    from aerosurr.data.store import load_group, load_index
+    from aerosurr.data.validate import read_geo_refs
+    from aerosurr.data.vtp import read_vtp
+    from aerosurr.eval.ensemble import combine
+    from aerosurr.models.surface import build_model
+    from aerosurr.physics.forces import integrate_torch
+    from aerosurr.train.data import Normaliser
+    from aerosurr.train.loop import predict_tensor
+    from aerosurr.viewer.export import decimate, nearest_cell_values, write_bin
+
+    paths, data = state.paths(), state.data()
+    configure_runtime(paths.workspace)
+    device = _cuda_device(gpu)
+    store = paths.data_store / data.store.version
+    out = out or paths.workspace / "viewer" / "data"
+    index = load_index(store)
+
+    def load(d: Path) -> tuple[torch.nn.Module, ModelConfig, TrainConfig, dict[str, object]]:
+        cfg = json.loads((d / "config.json").read_text())
+        mc, tc = ModelConfig.model_validate(cfg["model"]), TrainConfig.model_validate(cfg["train"])
+        m = build_model(mc).to(device)
+        m.load_state_dict(torch.load(d / "best.pt", map_location=device))
+        return m.eval(), mc, tc, cfg["stats"]
+
+    main, _mc, tc, stats = load(model_dir)
+    norm = Normaliser.from_stats(stats)
+    ens = [load(d) for d in members or []]
+    cars = []
+    for r in runs.split(","):
+        n = run_number(r)
+        g = {k: torch.from_numpy(v).to(device) for k, v in load_group(store, r, "full").items()}
+        mu, _ = predict_tensor(main, norm, g["centres"], g["normals"], tc.points, tc.bf16)
+        a_in = -g["normals"].double() * g["areas"].double()[:, None]
+        ref = read_geo_refs(paths.data_raw / r / f"geo_ref_{n}.csv").varying
+        fp = integrate_torch(mu[:, 0], mu[:, 1:], a_in, g["centres"], ref)
+        fields = {
+            "cp_true": g["cp"].float().cpu().numpy(),
+            "cp_pred": mu[:, 0].cpu().numpy(),
+            "cp_err": (mu[:, 0] - g["cp"].float()).cpu().numpy(),
+            "cf_true": torch.linalg.vector_norm(g["cf"].float(), dim=1).cpu().numpy(),
+            "cf_pred": torch.linalg.vector_norm(mu[:, 1:], dim=1).cpu().numpy(),
+        }
+        cd_sigma = None
+        if ens:
+            preds = [predict_tensor(m, norm, g["centres"], g["normals"], t.points, t.bf16,
+                                    c.heteroscedastic) for m, c, t, _ in ens]  # fmt: skip
+            comb = combine([p[0] for p in preds], [p[1] for p in preds])
+            fields["cp_sigma"] = comb.var[:, 0].sqrt().float().cpu().numpy()
+            cds = [
+                integrate_torch(p[0][:, 0], p[0][:, 1:], a_in, g["centres"], ref).cd for p in preds
+            ]
+            cd_sigma = float(np.std(cds))
+        surf = read_vtp(paths.data_raw / r / f"boundary_{n}.vtp")
+        verts, tris = decimate(surf.points, surf.offsets, surf.connectivity, cell)
+        vals = nearest_cell_values(g["centres"].cpu().numpy(), fields, verts)
+        meta = {"run": r, "cd_true": index[r].coeffs["varying"]["cd"], "cd_pred": fp.cd,
+                "cl_true": index[r].coeffs["varying"]["cl"], "cl_pred": fp.cl,
+                "cd_sigma": cd_sigma, "model": model_dir.name}  # fmt: skip
+        h = write_bin(out / f"{r}.bin", verts, tris, vals, meta, VIEWER_RANGES)
+        cars.append({k: v for k, v in h.items() if k != "header_bytes"} | {"file": f"{r}.b64.txt"})
+        typer.echo(f"{r}: {h['n_vertices']:,} vertices, {h['n_triangles']:,} triangles, "
+                   f"Cd {meta['cd_true']:.4f} -> {fp.cd:.4f}")  # fmt: skip
+        del g, mu
+    (out / "index.json").write_text(json.dumps({"cars": cars, "ranges": VIEWER_RANGES}, indent=1))
+    typer.echo(f"{len(cars)} cars -> {out}")
 
 
 if __name__ == "__main__":

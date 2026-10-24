@@ -223,3 +223,23 @@ def test_idw_and_lf_surface(tmp_path: Path) -> None:
     centres, fields = read_lf_surface(vtp, q)
     assert centres.shape == (n, 3) and fields.shape == (n, 4)
     np.testing.assert_allclose(fields, np.tile([1.0, 1.0, 0, 0], (n, 1)), rtol=1e-6)
+
+
+def test_viewer_bin_roundtrip(tmp_path: Path) -> None:
+    from aerosurr.viewer.export import decimate, nearest_cell_values, read_bin, write_bin
+
+    from .conftest import CUBE_FACES, CUBE_POINTS
+
+    off = np.cumsum([0] + [len(f) for f in CUBE_FACES])
+    conn = np.concatenate(CUBE_FACES)
+    verts, tris = decimate(CUBE_POINTS, off, conn, cell_size=0.25)
+    assert tris.ndim == 2 and tris.shape[1] == 3 and tris.max() < len(verts)
+    centres = np.array([[0.5, 0.5, 0.0], [0.5, 0.5, 1.0]])
+    vals = nearest_cell_values(centres, {"cp": np.array([-1.0, 1.0])}, verts)
+    assert set(np.unique(vals["cp"])) <= {-1.0, 1.0}
+    h = write_bin(tmp_path / "c.bin", verts, tris, vals, {"run": "run_7"}, {"cp": (-1.5, 1.0)})
+    hh, v2, t2, f2 = read_bin(tmp_path / "c.bin")
+    assert hh["run"] == "run_7" and h["header_bytes"] % 4 == 0
+    np.testing.assert_array_equal(v2, verts)
+    np.testing.assert_array_equal(t2, tris)
+    np.testing.assert_allclose(f2["cp"], vals["cp"], atol=2.5 / 65535)
