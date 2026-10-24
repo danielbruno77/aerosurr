@@ -300,11 +300,16 @@ its networks, rather than adopting its Hydra recipes wholesale.
   4. Scalar force correction (Cd_HF ≈ a + b·Cd_LF) as the classical baseline.
 - The headline plot is error versus number of HF training runs for 2, 3 and 4.
 
-### 5.4 Uncertainty (GPU 1) [PROPOSAL]
+### 5.4 Uncertainty (GPU 1)
 
-- Deep ensemble of M = 5 members (seeds and data order differ; same architecture
-  as §5.2, possibly smaller). Each member outputs a mean and a variance
-  (heteroscedastic Gaussian NLL). Total σ² = mean aleatoric + ensemble spread.
+**[IMPLEMENTED 2026-10-24]** in `eval/ensemble.py` and `aerosurr eval ensemble`, queued by
+`scripts/aero-ens-queue.sh` after the data-efficiency runs.
+
+- Deep ensemble of M = 5 members: the §5.2 Transolver with a heteroscedastic head
+  (`configs/model/transolver_het.yaml`), ~20k steps each (`configs/train/ens.yaml`).
+  Members differ by seed, which changes both initialisation and data order. Each member
+  outputs a mean and a variance (Gaussian NLL). Total σ² = mean aleatoric + ensemble
+  spread.
 - σ for integrated forces comes from integrating each member's field.
 - Calibration is fitted on `full_val`, a single temperature per field, and
   reported on `full_test`: coverage at 50/90/95 %, NLL, and Spearman correlation
@@ -331,8 +336,15 @@ its networks, rather than adopting its Hydra recipes wholesale.
   one speed, no yaw, time-averaged), compute and energy.
 - Interactive 3D viewer: static three.js page. It shows decimated test cars with
   per-vertex Cp, |Cf|, error and σ, a case picker and a colour-map toggle.
-  Data is exported by `aerosurr viewer export` in a compact binary format.
-  Hosting: a claude.ai artifact. GitHub Pages needs a public repo, or a paid plan for a
+  Data is exported by `aerosurr viewer export`:
+  - decimation by quadric clustering to ~70k vertices per car;
+  - u16-quantised fields with fixed ranges across cars;
+  - a base64 text copy for hosting.
+
+  **[IMPLEMENTED 2026-10-24]** as `viewer/index.html` (three.js r169), published
+  privately as a claude.ai artifact: https://claude.ai/artifact/TUdgikAyaEBpoyzqejMkPn.
+  The current version is a preview with a mid-training checkpoint; it is re-exported with
+  the final model and ensemble σ. GitHub Pages needs a public repo, or a paid plan for a
   private one.
 - Figures: parity (Cd and Cl with σ bars), error-versus-HF-count (MF), calibration
   curves, Cp on the surface (truth / prediction / error / σ).
@@ -365,9 +377,17 @@ its networks, rather than adopting its Hydra recipes wholesale.
 - Paths, set in `configs/paths.yaml` and overridable by env: repo
   `~/aero-surrogate-demo`, workspace `~/aero/` with `data/raw`, `data/store`,
   `runs/`, `rans/` and `logs/`.
-- tmux sessions: `aero-dl`, `aero-train0` (GPU 0), `aero-ens1` (GPU 1),
-  `aero-rans`. Each job logs to `~/aero/logs/<session>/<timestamp>.log` and
-  writes JSON metrics to its run directory.
+- tmux sessions, each job logging to `~/aero/logs/<session>/<timestamp>.log` (with
+  `latest.log`) and writing JSON metrics to its run directory:
+  - `aero-dl`: downloads.
+  - `aero-store`: store build.
+  - `aero-rans`: windows `bench`, `scaling` and `batch`. Ad-hoc `rans run` logs to
+    `aero-rans-run`.
+  - `aero-train0` (GPU 0): main model, then the `geo` and `mf` queues.
+  - `aero-ens1` (GPU 1): windows `ds` and `ens`.
+
+  `aerosurr report` turns the evaluation JSON into `docs/results.md` and
+  `docs/figures/`.
 - Shell setup: `. ~/aero/env.sh` (uv on PATH; uv, pre-commit, inductor and Triton caches
   under `~/aero/cache`; `AEROSURR_DATA`). Launchers in `scripts/` call `.venv/bin/aerosurr`
   directly, so a running job never re-syncs the env.
@@ -380,7 +400,7 @@ its networks, rather than adopting its Hydra recipes wholesale.
 | Day | Main thread | Background |
 |---|---|---|
 | **0** ✅ | Connection, GPU stack verified, env, repo skeleton + CI, T0/T1 download, inspection gate passed (all done 2026-10-24) | T2 download running in `aero-dl` (started 04:10) |
-| **1** | Physics module + reference-force tests green; compact store; baseline model; Transolver training starts on GPU 0. RANS pipeline built and validated on run_1 (Cd vs HF), mesh size fixed | RANS batch starts (2 × 30 ranks); preprocessing finishes |
+| **1** ✅ | Physics module + reference-force tests green (all 484 runs); compact store (34 GB); PointNet baseline; PhysicsNeMo Transolver training on GPU 0. RANS pipeline built and validated on run_1 (Cd −2 counts vs HF), coarse mesh and 1000 iterations fixed by benchmark | RANS batch running, 1 case × 24 spread ranks (§2); data-efficiency + ensemble queue on GPU 1; MF queue on GPU 0; viewer preview published |
 | **2** | Main-model evaluation and figures; data-efficiency ablation; LF→HF mapping | Ensemble on GPU 1; RANS batch continues |
 | **3** | MF correction and comparison; calibration; viewer; model card; README; final numbers | Remaining ensemble or OOD runs |
 
