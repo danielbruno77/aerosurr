@@ -124,3 +124,18 @@ def test_wrong_shear_sign_fails_the_gate(
     monkeypatch.setattr(forces, "SHEAR_SIGN", +1.0)
     res = validate_run(data_root, "run_1", cfg.fields, cfg.freestream)
     assert not within_tolerance("cd", res.ours["varying"]["cd"], res.ref["varying"]["cd"])
+
+
+def test_integrate_torch_matches_numpy() -> None:
+    import torch
+
+    from aerosurr.physics.forces import integrate_torch
+
+    c, a = cube()
+    rng = np.random.default_rng(3)
+    cp, cf = rng.normal(size=len(a)), rng.normal(size=(len(a), 3)) * 0.01
+    ref = integrate(cp, cf, a, c, REF).as_dict()
+    got = integrate_torch(torch.from_numpy(cp), torch.from_numpy(cf), torch.from_numpy(a),
+                          torch.from_numpy(c), REF).as_dict()  # fmt: skip
+    for k, v in ref.items():
+        assert got[k] == pytest.approx(v, rel=1e-12, abs=1e-15), k

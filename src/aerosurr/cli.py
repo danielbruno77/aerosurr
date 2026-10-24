@@ -500,7 +500,8 @@ def rans_run(
         )
     cpu_count_ok(cpu_list)
     paths = state.paths()
-    setup_logging(paths.logs / "aero-rans", case.name)
+    # Not "aero-rans": that is the batch's log dir, and its latest.log must stay the batch's.
+    setup_logging(paths.logs / "aero-rans-run", case.name)
     from aerosurr.data.splits import run_number
 
     fm = paths.data_raw / meta["run"] / f"force_mom_{run_number(meta['run'])}.csv"
@@ -573,6 +574,41 @@ def rans_batch(
     failed = [r for r, ok in results.items() if not ok]
     log.info("batch finished: %d ok, %d failed %s", len(results) - len(failed), len(failed), failed)
     raise typer.Exit(1 if failed else 0)
+
+
+@rans_app.command("map")
+def rans_map(
+    root: Annotated[
+        Path | None, typer.Option(help="Cases root (default paths.rans/batch).")
+    ] = None,
+    force: Annotated[bool, typer.Option("--force", help="Re-map runs already mapped.")] = False,
+    cpus: Annotated[str | None, typer.Option(help="Pin to these CPUs.")] = None,
+) -> None:
+    """Map every finished LF case's car surface onto its HF cells -> <store>/lf/<run>.npz."""
+    import os
+
+    from aerosurr.rans.mapping import LF_DIR, map_run
+    from aerosurr.rans.run import RESULT_NAME, parse_cpus
+
+    paths, data = state.paths(), state.data()
+    if cpus:
+        os.sched_setaffinity(0, parse_cpus(cpus))
+    store = paths.data_store / data.store.version
+    root = root or paths.rans / "batch"
+    index_path = store / LF_DIR / "index.json"
+    index = json.loads(index_path.read_text()) if index_path.is_file() else {}
+    for case in sorted(root.glob("*/")):
+        r = json.loads((case / RESULT_NAME).read_text()) if (case / RESULT_NAME).is_file() else {}
+        if r.get("status") != "done" or not r.get("surface"):
+            continue
+        run = case.name.split("_coarse")[0]
+        if run in index and not force:
+            continue
+        st = map_run(case / r["surface"], store, run, data.freestream.q_inf, data.freestream.p_inf)
+        index[run] = st | {"case": case.name, "coeffs": r["coeffs"], "reference": r["reference"]}
+        index_path.write_text(json.dumps(index, indent=1))
+        typer.echo(f"{run}: {st}")
+    typer.echo(f"{len(index)} runs mapped -> {store / LF_DIR}")
 
 
 @rans_app.command("summary")
@@ -658,6 +694,50 @@ def train_run(
     typer.echo(json.dumps(s.__dict__, indent=2, default=str))
 
 
+@eval_app.command("lf")
+def eval_lf(
+    split: Annotated[str, typer.Option(help="Split whose mapped runs to evaluate.")] = "full_test",
+) -> None:
+    """'LF alone' baseline (SPEC §5.3, model 1): mapped RANS fields vs HF on the native mesh."""
+    from aerosurr.data.splits import load_manifest, run_number
+    from aerosurr.data.store import load_group
+    from aerosurr.data.validate import read_geo_refs
+    from aerosurr.eval.metrics import FIELD_NAMES, relative_l2
+    from aerosurr.physics.forces import integrate
+    from aerosurr.rans.mapping import LF_DIR
+    from aerosurr.train.data import load_lf
+
+    paths, data = state.paths(), state.data()
+    store = paths.data_store / data.store.version
+    runs = [r for r in load_manifest(paths.data_raw / "splits/manifest.json")[split]
+            if (store / LF_DIR / f"{r}.npz").is_file()]  # fmt: skip
+    import numpy as np
+
+    rows = {}
+    for r in runs:
+        g = load_group(store, r, "full")
+        lf = load_lf(store, r, "full").astype(np.float64)
+        true = np.concatenate([g["cp"].reshape(-1, 1), g["cf"].reshape(-1, 3)], 1)
+        a_in = -g["normals"].astype(np.float64) * g["areas"].astype(np.float64)[:, None]
+        ref = read_geo_refs(paths.data_raw / r / f"geo_ref_{run_number(r)}.csv").varying
+        rows[r] = {
+            "rel_l2": dict(
+                zip(FIELD_NAMES, relative_l2(lf, true, g["areas"]).tolist(), strict=True)
+            ),
+            "pred": integrate(lf[:, 0], lf[:, 1:], a_in, g["centres"], ref).as_dict(),
+            "true": integrate(true[:, 0], true[:, 1:], a_in, g["centres"], ref).as_dict(),
+        }
+    if not rows:
+        typer.echo(f"no mapped LF runs in {split}")
+        raise typer.Exit(1)
+    dcd = np.array([v["pred"]["cd"] - v["true"]["cd"] for v in rows.values()])
+    rel = {f: float(np.mean([v["rel_l2"][f] for v in rows.values()])) for f in FIELD_NAMES}
+    out = {"split": split, "runs": len(rows), "rel_l2": rel,
+           "cd_mae_counts": float(np.abs(dcd).mean() * 1000), "per_run": rows}  # fmt: skip
+    (store / LF_DIR / f"eval_{split}.json").write_text(json.dumps(out, indent=1))
+    typer.echo(json.dumps({k: v for k, v in out.items() if k != "per_run"}, indent=2))
+
+
 @eval_app.command("run")
 def eval_run(
     run_dir: Annotated[Path, typer.Argument(help="A training run directory.")],
@@ -686,7 +766,7 @@ def eval_run(
     runs = load_manifest(paths.data_raw / "splits/manifest.json")[split]
     store = paths.data_store / data.store.version
     res = evaluate_full(fwd, Normaliser.from_stats(cfg["stats"]), store, paths.data_raw, runs,
-                        tc.points, device, tc.bf16)  # fmt: skip
+                        tc.points, device, tc.bf16, mc.lf_inputs, mc.predict_residual)  # fmt: skip
     (run_dir / f"{split}.json").write_text(json.dumps(res, indent=1))
     typer.echo(json.dumps({k: v for k, v in res.items() if k != "per_run"}, indent=2))
 

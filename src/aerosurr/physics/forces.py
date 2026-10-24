@@ -16,9 +16,13 @@ Conventions, established against DrivAerML's `force_mom_i.csv` by tests/test_phy
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
+
+if TYPE_CHECKING:  # torch is only needed by integrate_torch; keep `physics` import light
+    import torch
 
 F64 = NDArray[np.float64]
 
@@ -77,6 +81,38 @@ def integrate(
     cm = np.cross(r, df).sum(axis=0) / (ref.a_ref * ref.l_ref)
     cp64 = np.asarray(cp, dtype=np.float64).reshape(-1)
     cd_p = float((cp64 * a[:, 0]).sum() / ref.a_ref)
+    cl = float(f[2])
+    return ForceCoefficients(
+        cd=float(f[0]),
+        cl=cl,
+        cs=float(f[1]),
+        clf=cl / 2 + float(cm[1]),
+        clr=cl / 2 - float(cm[1]),
+        cm_roll=float(cm[0]),
+        cm_pitch=float(cm[1]),
+        cm_yaw=float(cm[2]),
+        cd_pressure=cd_p,
+        cd_friction=float(f[0]) - cd_p,
+    )
+
+
+def integrate_torch(
+    cp: torch.Tensor,
+    cf: torch.Tensor,
+    area_vectors: torch.Tensor,
+    centres: torch.Tensor,
+    ref: Reference,
+) -> ForceCoefficients:
+    """`integrate` on (GPU) tensors, in float64; same conventions, tested to agree."""
+    import torch
+
+    a = area_vectors.double()
+    mag = torch.linalg.vector_norm(a, dim=1)
+    df = cp.double().reshape(-1, 1) * a + SHEAR_SIGN * cf.double().reshape(-1, 3) * mag[:, None]
+    f = df.sum(dim=0) / ref.a_ref
+    cor = torch.as_tensor(ref.cor, dtype=torch.float64, device=a.device)
+    cm = torch.linalg.cross(centres.double() - cor, df, dim=1).sum(dim=0) / (ref.a_ref * ref.l_ref)
+    cd_p = float((cp.double().reshape(-1) * a[:, 0]).sum()) / ref.a_ref
     cl = float(f[2])
     return ForceCoefficients(
         cd=float(f[0]),

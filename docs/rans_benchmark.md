@@ -80,13 +80,44 @@ file on 4 workers and a PhysicsNeMo Transolver training step fed from host memor
 146 ms on GPU 0. Training keeps its data on the GPU, so it puts little load on host
 memory.
 
+## Machine-state slowdown after 06:40 (open issue for Daniel)
+
+Memory-bound throughput dropped by ~1.8× during the compact-store build (06:40–07:00)
+and **did not recover** once the build finished:
+
+- The same benchmark case (S6: run_1, coarse, the same 24 spread cores, 200 iterations,
+  alone, with the batch paused) gives **0.380 s/iteration at 06:2x and 0.690 s at 07:55**
+  (S6c). snappyHexMesh, which is less memory-bound, is unchanged (60 s against 58 s).
+- Ruled out by direct tests:
+  - training load: pausing the GPU-0 training process for 3 min changes nothing;
+  - GPU heat: with both GPUs idle for 3 min, Tctl only falls from 96 to 95 °C and the
+    solver speed doesn't change;
+  - page cache: evicting 170 GB of cached VTPs with `posix_fadvise` changes nothing;
+  - kernel overhead: system time is 1–2 % of the solver's CPU time;
+  - `/dev/shm`: 4 MB used, no MPI warnings;
+  - core clocks: busy cores run at 4.4–4.7 GHz;
+  - power cap: the package draws 248 W of 350 W.
+- HSMP telemetry (`/sys/devices/platform/AMDI0097:00`): FCLK 2000 MHz, MCLK 2400 MHz
+  (**DDR5-4800, 4 channels, 154 GB/s peak**), PROCHOT 0. The RANS uses only 60 GB/s
+  (40 %), yet runs half as fast as before.
+- The CPU runs at **Tctl 95–97 °C** under 24-core load. The likeliest cause is DRAM
+  thermal throttling after an hour of sustained memory traffic: DDR5 modules throttle
+  themselves when hot, and this host exposes no DIMM temperatures.
+- To check (needs root): `sudo modprobe spd5118 && sensors` for DIMM temperatures, and
+  `sudo dmidecode -t memory` for the configured speed. Case airflow over the DIMMs is
+  the first thing to look at.
+
+Effect on the plan: the batch runs at ~0.68–0.75 s/iteration, ~13 min per case, so the
+100 cases take ~22 h instead of ~13 h. They finish ~04:30 on 2026-10-25, still before the
+Day 3 MF work, and the interleaved queue gives ~25 train + 25 test LF cases by ~18:00.
+
 ## Decision
 
 - Batch: `scripts/aero-rans-batch.sh` with
   `SLOTS="A=0-2,8-10,16-18,24-26,32-34,40-42,48-50,56-58"`: one slot, 24 spread ranks,
   coarse preset, 1000 iterations, over the 100-run queue in `~/aero/rans/subset_v1.txt`
   (50 `full_test` interleaved with 50 train runs, `super_scarce` → `scarce` first).
-  Started 2026-10-24 06:38. Expected to finish ~20:00 the same day.
+  Started 2026-10-24 06:38. Expected to finish ~04:30 on 2026-10-25 (see the slowdown above).
 - Each finished case keeps the car surface (`postProcessing/carSurface/1000/car.vtp`,
   with `pMean`, `wallShearStressMean` and `yPlus`), the forces and the logs: ~90 MB. The
   `processor*` directories are removed.

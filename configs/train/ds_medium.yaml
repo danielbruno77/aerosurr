@@ -1,0 +1,15 @@
+# Data-efficiency study (SPEC §5.2): HF-only Transolver on medium_train (133 runs), the same
+# ~20k-step budget for every training-set size, selected on full_val, tested on full_test.
+split: medium
+epochs: 150
+points: 200000
+lr: 0.001
+weight_decay: 0.0001
+warmup_epochs: 4
+seed: 0
+compile: true
+bf16: true
+data_on_gpu: true
+eval_every: 10
+full_eval_every: 75
+max_hours: 1.5

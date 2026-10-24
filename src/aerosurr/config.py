@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -210,9 +210,22 @@ class ModelConfig(_Strict):
     mlp_ratio: int = Field(default=4, ge=1)
     dropout: float = Field(default=0.0, ge=0, lt=1)
     heteroscedastic: bool = Field(default=False, description="predict mean + log-variance")
+    lf_inputs: bool = Field(default=False, description="append mapped LF RANS (Cp, Cf) features")
+    predict_residual: bool = Field(default=False, description="with lf_inputs: learn HF - LF")
     pn_local: list[int] = Field(default_factory=lambda: [128, 256])
     pn_global: int = 512
     pn_head: list[int] = Field(default_factory=lambda: [256, 128])
+
+    @property
+    def feature_dim(self) -> int:
+        """Per-point features besides position: the normal, plus LF fields if used."""
+        return 3 + (4 if self.lf_inputs else 0)
+
+    @model_validator(mode="after")
+    def _residual_needs_lf(self) -> ModelConfig:
+        if self.predict_residual and not self.lf_inputs:
+            raise ValueError("predict_residual needs lf_inputs")
+        return self
 
 
 class TrainConfig(_Strict):
@@ -230,6 +243,9 @@ class TrainConfig(_Strict):
     eval_every: int = Field(default=5, gt=0, description="epochs between pool validations")
     full_eval_every: int = Field(default=25, gt=0, description="epochs between full-mesh evals")
     max_train_runs: int | None = Field(default=None, gt=0)
+    train_runs: list[str] | None = Field(
+        default=None, description="explicit training runs (overrides split/max_train_runs)"
+    )
     max_hours: float | None = Field(default=None, gt=0)
 
 

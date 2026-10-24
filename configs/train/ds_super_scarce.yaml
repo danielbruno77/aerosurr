@@ -1,0 +1,15 @@
+# Data-efficiency study (SPEC §5.2): HF-only Transolver on super_scarce_train (11 runs), the same
+# ~20k-step budget for every training-set size, selected on full_val, tested on full_test.
+split: super_scarce
+epochs: 1800
+points: 200000
+lr: 0.001
+weight_decay: 0.0001
+warmup_epochs: 50
+seed: 0
+compile: true
+bf16: true
+data_on_gpu: true
+eval_every: 100
+full_eval_every: 900
+max_hours: 1.5

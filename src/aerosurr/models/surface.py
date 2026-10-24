@@ -1,4 +1,7 @@
-"""Surface-field models: (cell centres, unit normals) -> (Cp, Cf_x, Cf_y, Cf_z), normalised.
+"""Surface-field models: (cell centres, features) -> (Cp, Cf_x, Cf_y, Cf_z), normalised.
+
+Features are the unit normal (3), plus the mapped low-fidelity RANS fields (4) for the
+multi-fidelity variant (`lf_inputs`, SPEC §5.3).
 
 The main models wrap NVIDIA PhysicsNeMo networks (SPEC §5.2). The PointNet baseline is
 in-house and gives the floor. With `heteroscedastic`, a model outputs 4 means and 4
@@ -31,12 +34,12 @@ class PointNetBaseline(nn.Module):
 
     def __init__(self, cfg: ModelConfig, out_dim: int) -> None:
         super().__init__()
-        self.local = _mlp([6, *cfg.pn_local])
+        self.local = _mlp([3 + cfg.feature_dim, *cfg.pn_local])
         self.glob = _mlp([cfg.pn_local[-1], cfg.pn_global])
         self.head = _mlp([cfg.pn_local[-1] + cfg.pn_global, *cfg.pn_head, out_dim], last_act=False)
 
-    def forward(self, pos: torch.Tensor, nrm: torch.Tensor) -> torch.Tensor:
-        h = self.local(torch.cat([pos, nrm], dim=-1))  # (B, N, C)
+    def forward(self, pos: torch.Tensor, feat: torch.Tensor) -> torch.Tensor:
+        h = self.local(torch.cat([pos, feat], dim=-1))  # (B, N, C)
         # Global max-pool in fp32 via max(dim): under torch.compile + bf16, amax's backward
         # (which splits the gradient among tied maxima) gave NaN gradients.
         g = self.glob(h).float().max(dim=1, keepdim=True).values  # (B, 1, G)
@@ -46,14 +49,14 @@ class PointNetBaseline(nn.Module):
 
 
 class PhysicsNeMoTransolver(nn.Module):
-    """`physicsnemo.models.transolver.Transolver`: normals as features, positions as embedding."""
+    """`physicsnemo.models.transolver.Transolver`: features in, positions as the embedding."""
 
     def __init__(self, cfg: ModelConfig, out_dim: int) -> None:
         super().__init__()
         from physicsnemo.models.transolver import Transolver
 
         self.net = Transolver(
-            functional_dim=3,
+            functional_dim=cfg.feature_dim,
             embedding_dim=3,
             out_dim=out_dim,
             n_layers=cfg.n_layers,
@@ -65,8 +68,8 @@ class PhysicsNeMoTransolver(nn.Module):
             use_te=False,
         )
 
-    def forward(self, pos: torch.Tensor, nrm: torch.Tensor) -> torch.Tensor:
-        out: torch.Tensor = self.net(nrm, embedding=pos)
+    def forward(self, pos: torch.Tensor, feat: torch.Tensor) -> torch.Tensor:
+        out: torch.Tensor = self.net(feat, embedding=pos)
         return out
 
 
@@ -78,7 +81,7 @@ class PhysicsNeMoGeoTransolver(nn.Module):
         from physicsnemo.models.geotransolver import GeoTransolver
 
         self.net = GeoTransolver(
-            functional_dim=6,
+            functional_dim=3 + cfg.feature_dim,
             out_dim=out_dim,
             geometry_dim=3,
             n_layers=cfg.n_layers,
@@ -90,8 +93,8 @@ class PhysicsNeMoGeoTransolver(nn.Module):
             use_te=False,
         )
 
-    def forward(self, pos: torch.Tensor, nrm: torch.Tensor) -> torch.Tensor:
-        out: torch.Tensor = self.net(torch.cat([pos, nrm], dim=-1), geometry=pos)
+    def forward(self, pos: torch.Tensor, feat: torch.Tensor) -> torch.Tensor:
+        out: torch.Tensor = self.net(torch.cat([pos, feat], dim=-1), geometry=pos)
         return out
 
 

@@ -65,8 +65,9 @@ def test_stats_and_normaliser(tiny: tuple[Path, Path, dict[str, list[str]]]) -> 
     back = norm.y_torch_inv(torch.from_numpy(y)).numpy()
     np.testing.assert_allclose(back[:, 0], g["cp"].astype(np.float32), atol=1e-5)
     pools = PoolSet(store, m["full_train"], norm, torch.device("cpu"))
-    pos, _nrm, yy, area = pools.sample(0, 50, torch.Generator().manual_seed(0), torch.device("cpu"))
-    assert pos.shape == (1, 50, 3) and yy.shape == (1, 50, 4) and area.shape == (1, 50)
+    b = pools.sample(0, 50, torch.Generator().manual_seed(0), torch.device("cpu"))
+    assert b.pos.shape == (1, 50, 3) and b.y.shape == (1, 50, 4) and b.area.shape == (1, 50)
+    assert b.feat.shape == (1, 50, 3) and b.lf is None
 
 
 @pytest.mark.parametrize("kind", ["pointnet", "transolver"])
@@ -119,3 +120,42 @@ def test_train_end_to_end(tiny: tuple[Path, Path, dict[str, list[str]]], tmp_pat
     full = json.loads((out / "full_val.json").read_text())
     assert full["runs"] == 1 and set(full["rel_l2"]) == {"cp", "cf_x", "cf_y", "cf_z"}
     assert np.isfinite(full["cd_mae_counts"])
+
+
+def add_fake_lf(store: Path, run: str) -> None:
+    """LF = HF + a smooth bias, as `rans map` would write it."""
+    from aerosurr.rans.mapping import LF_DIR
+
+    out = {}
+    with np.load(store / f"{run}.npz") as z:
+        for g in ("pool", "full"):
+            if f"{g}_cp" in z.files:
+                hf = np.column_stack([z[f"{g}_cp"], z[f"{g}_cf"]]).astype(np.float32)
+                out[f"{g}_lf"] = (hf + 0.1).astype(np.float16)
+    (store / LF_DIR).mkdir(exist_ok=True)
+    np.savez(store / LF_DIR / f"{run}.npz", **out)
+
+
+def test_mf_residual_training(
+    tiny: tuple[Path, Path, dict[str, list[str]]], tmp_path: Path
+) -> None:
+    store, raw, m = tiny
+    for r in m["full_train"] + m["full_val"]:
+        add_fake_lf(store, r)
+    stats = compute_stats(store, m["full_train"])
+    norm = Normaliser.from_stats(stats)
+    pools = PoolSet(store, m["full_train"], norm, torch.device("cpu"), lf=True)
+    b = pools.sample(0, 32, torch.Generator().manual_seed(0), torch.device("cpu"))
+    assert b.feat.shape == (1, 32, 7) and b.lf is not None and b.lf.shape == (1, 32, 4)
+    mc = ModelConfig(kind="transolver", n_layers=1, n_hidden=16, n_head=2, slice_num=4,  # type: ignore[arg-type]
+                     lf_inputs=True, predict_residual=True)  # fmt: skip
+    assert mc.feature_dim == 7
+    tc = TrainConfig(epochs=1, points=64, compile=False, bf16=False, data_on_gpu=False,
+                     eval_every=1, full_eval_every=1, warmup_epochs=0,
+                     train_runs=["run_1", "run_2"])  # fmt: skip
+    s = train("mf", mc, tc, m, store, raw, stats, tmp_path / "mf", torch.device("cpu"))
+    assert s.steps == 2  # train_runs overrides the split
+    full = json.loads((tmp_path / "mf" / "full_val.json").read_text())
+    assert np.isfinite(full["rel_l2"]["cp"])
+    with pytest.raises(ValueError, match="needs lf_inputs"):
+        ModelConfig(kind="pointnet", predict_residual=True)  # type: ignore[arg-type]
