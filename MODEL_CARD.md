@@ -9,11 +9,11 @@ evaluation files, so this card never carries numbers by hand.
 | | |
 |---|---|
 | Task | Time-averaged surface pressure coefficient Cp and skin-friction vector Cf on a car's native surface mesh, from geometry alone |
-| Main model | NVIDIA PhysicsNeMo `Transolver` (physics-attention), 8 layers × 256 wide, 8 heads, 64 slices, 6.0 M parameters |
+| Main model | NVIDIA PhysicsNeMo `GeoTransolver`, selected on `full_val` Cd MAE (3.1 against 3.9 counts for `Transolver`): 8 layers × 256 wide, 8 heads, 64 slices, 6.0 M parameters, with the cell positions also passed as geometry |
 | Inputs per cell | cell centre (normalised isotropically into ~[-1, 1]), outward unit normal |
 | Outputs per cell | Cp, Cf_x, Cf_y, Cf_z, each standardised with `full_train` statistics |
-| Multi-fidelity variant | Same network plus the coarse-RANS Cp and Cf mapped onto each cell (7 input features); it learns the HF − LF residual |
-| Uncertainty | Deep ensemble of 5 heteroscedastic members (mean + log-variance, Gaussian NLL), with a per-field temperature fitted on `full_val` |
+| Multi-fidelity variant | `Transolver` plus the coarse-RANS Cp and Cf mapped onto each cell (7 input features); it learns the HF − LF residual. It is compared with an HF-only `Transolver` trained on the same cars, and both keep their final weights because the val cars have no RANS |
+| Uncertainty | Deep ensemble of 5 heteroscedastic `Transolver` members (mean + log-variance, Gaussian NLL), with a per-field temperature fitted on `full_val`. The members were launched before model selection, so the ensemble uses the Transolver family |
 | Baselines | In-house PointNet-style model (0.4 M parameters); LF RANS alone; scalar correction Cd_HF = a + b·Cd_LF |
 | Code | `src/aerosurr` (CLI: `aerosurr train run`, `eval run`, `eval ensemble`, `report`) |
 

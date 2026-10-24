@@ -13,3 +13,4 @@ compile: true
 bf16: true
 data_on_gpu: true
 max_hours: 1.5
+select_on_val: false     # the val cars have no LF RANS; every model in the study keeps its final weights

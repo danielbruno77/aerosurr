@@ -5,14 +5,15 @@ it predicts time-averaged surface Cp and wall shear stress on a full car from ge
 corrects a coarse in-house OpenFOAM RANS towards the dataset's HRLES, and reports
 deep-ensemble uncertainty. The design and the plan are in [SPEC.md](SPEC.md).
 
-**Headline (50 held-out `full_test` cars, native 7–10 M-cell meshes):** NVIDIA
-PhysicsNeMo Transolver predicts surface Cp with 6.4 % relative L2 error. Integrated
-drag is within **3.9 drag counts** on average (Cd R² 0.92), against 21.8 counts for an
-in-house PointNet baseline. Full tables, data efficiency, the multi-fidelity study and
-calibration are in [docs/results.md](docs/results.md). An interactive 3D viewer is
-published privately as a claude.ai artifact.
+**Headline (50 held-out `full_test` cars, native 7–10 M-cell meshes):** NVIDIA PhysicsNeMo
+GeoTransolver, selected on `full_val`, predicts surface Cp with 6.1 % relative L2 error.
+Integrated drag is within **2.8 drag counts** on average (max 11.2, Cd R² 0.96), against
+21.8 counts for an in-house PointNet baseline; PhysicsNeMo Transolver reaches 3.9 counts.
+Full tables, data efficiency, the multi-fidelity study and calibration are in
+[docs/results.md](docs/results.md). An interactive 3D viewer is published privately as a
+claude.ai artifact.
 
-![Cd and Cl parity on full_test](docs/figures/parity_transolver.png)
+![Cd and Cl parity on full_test](docs/figures/parity_main.png)
 
 **Status: Day 1 done.** Every one of the 484 runs passes the physics gate (integrated
 forces match DrivAerML's reference CSVs to ≤ 8e-7). The coarse RANS batch, deep ensemble

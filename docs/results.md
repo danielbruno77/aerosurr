@@ -11,8 +11,11 @@ predicted fields over the native cells (1 count = 0.001 Cd).
 |---|---|---|---|---|---|---|---|---|
 | PointNet baseline (in-house) | 50 | 0.296 | 0.315 | 0.496 | 21.8 | 84.4 | -1.492 | 0.0509 |
 | PhysicsNeMo Transolver | 50 | 0.064 | 0.079 | 0.131 | 3.9 | 13.1 | 0.923 | 0.0090 |
+| PhysicsNeMo GeoTransolver | 50 | 0.061 | 0.076 | 0.126 | 2.8 | 11.2 | 0.959 | 0.0090 |
 
-![Cd and Cl parity](figures/parity_transolver.png)
+Main model, selected on `full_val` Cd MAE (3.13 counts): **PhysicsNeMo GeoTransolver**.
+
+![Cd and Cl parity](figures/parity_main.png)
 
 ## Data efficiency (nested official splits)
 
@@ -27,7 +30,7 @@ training longer.
 | 67 | 20k | 0.093 | 6.4 |
 | 133 | 20k | 0.093 | 5.3 |
 | 400 | 20k | 0.089 | 6.7 |
-| 400 | 60k (main) | 0.064 | 3.9 |
+| 400 | 60k (main) | 0.061 | 2.8 |
 
 ![Data efficiency](figures/data_efficiency_cd.png)
 

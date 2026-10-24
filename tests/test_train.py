@@ -206,3 +206,17 @@ def test_ensemble_end_to_end(tiny: tuple[Path, Path, dict[str, list[str]]], tmp_
     for q in ("0.5", "0.9", "0.95"):
         assert 0.0 <= res["coverage"][q]["cp"] <= 1.0
     assert res["temperature"]["fields"]["cp"] > 0 and np.isfinite(res["cd_mae_counts"])
+
+
+def test_mf_without_val_lf(tiny: tuple[Path, Path, dict[str, list[str]]], tmp_path: Path) -> None:
+    """MF study: no LF on the val cars, so no selection; the final weights are kept."""
+    store, raw, m = tiny
+    for r in m["full_train"]:
+        add_fake_lf(store, r)  # val (run_4) deliberately has none
+    stats = compute_stats(store, m["full_train"])
+    mc = ModelConfig(kind="pointnet", lf_inputs=True, predict_residual=True)  # type: ignore[arg-type]
+    tc = TrainConfig(epochs=2, points=64, compile=False, bf16=False, data_on_gpu=False,
+                     select_on_val=False)  # fmt: skip
+    s = train("mf", mc, tc, m, store, raw, stats, tmp_path / "mf", torch.device("cpu"))
+    assert s.best_epoch == 2 and s.final_full_val is None
+    assert (tmp_path / "mf" / "best.pt").is_file()

@@ -255,6 +255,11 @@ class TrainConfig(_Strict):
         default=None, description="explicit training runs (overrides split/max_train_runs)"
     )
     max_hours: float | None = Field(default=None, gt=0)
+    select_on_val: bool = Field(
+        default=True,
+        description="keep the best checkpoint on the val split; False keeps the final one "
+        "(MF study: val cars have no LF RANS, so no model there validates)",
+    )
 
 
 # --------------------------------------------------------------------------- loader

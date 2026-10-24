@@ -235,14 +235,14 @@ def train(
                 "train_runs": train_runs}  # fmt: skip
     (out_dir / "config.json").write_text(json.dumps(cfg_dump, indent=2))
     norm = Normaliser.from_stats(stats)
-    val_runs = manifest[f"{tc.split}_val"]
+    val_runs = manifest[f"{tc.split}_val"] if tc.select_on_val else []
     lf, res = model_cfg.lf_inputs, model_cfg.predict_residual
     data_dev = device if tc.data_on_gpu else torch.device("cpu")
     t_load = time.time()
     tr = PoolSet(store, train_runs, norm, data_dev, lf=lf)
-    va = PoolSet(store, val_runs, norm, data_dev, lf=lf)
+    va = PoolSet(store, val_runs, norm, data_dev, lf=lf) if val_runs else None
     log.info("%s: %d train / %d val runs, pool %d, loaded in %.0f s (data on %s)", name,
-             len(tr), len(va), tr.pool_size, time.time() - t_load, data_dev)  # fmt: skip
+             len(tr), len(val_runs), tr.pool_size, time.time() - t_load, data_dev)  # fmt: skip
 
     model = build_model(model_cfg).to(device)
     log.info("%s: %s, %.2f M params", name, model_cfg.kind, n_params(model) / 1e6)
@@ -278,7 +278,7 @@ def train(
         hours = (time.time() - t0) / 3600
         rec: dict[str, Any] = {"epoch": epoch, "step": step, "loss": ep_loss / len(tr),
                                "lr": opt.param_groups[0]["lr"], "hours": hours}  # fmt: skip
-        if epoch % tc.eval_every == 0 or epoch == tc.epochs:
+        if va is not None and (epoch % tc.eval_every == 0 or epoch == tc.epochs):
             model.eval()
             val = evaluate_pools(fwd, va, tc.points, device, tc.bf16, hetero, norm, res)
             rec["val_rel_l2"] = val
@@ -286,7 +286,7 @@ def train(
             if score < best:
                 best, best_epoch, best_val = score, epoch, val
                 torch.save(model.state_dict(), out_dir / "best.pt")
-        if epoch % tc.full_eval_every == 0:
+        if val_runs and epoch % tc.full_eval_every == 0:
             model.eval()
             full = evaluate_full(
                 fwd, norm, store, raw, val_runs, tc.points, device, tc.bf16, lf, res, hetero
@@ -302,14 +302,20 @@ def train(
             log.warning("%s: time limit %.1f h reached after epoch %d", name, tc.max_hours, epoch)
             break
     metrics.close()
-    model.load_state_dict(torch.load(out_dir / "best.pt", map_location=device))
-    model.eval()
-    full = evaluate_full(
-        fwd, norm, store, raw, val_runs, tc.points, device, tc.bf16, lf, res, hetero
-    )
-    (out_dir / "full_val.json").write_text(json.dumps(full, indent=1))
+    final_full: dict[str, Any] | None = None
+    if va is None:  # no selection: the final weights are the model
+        torch.save(model.state_dict(), out_dir / "best.pt")
+        best_epoch = epoch
+    else:
+        model.load_state_dict(torch.load(out_dir / "best.pt", map_location=device))
+        model.eval()
+        full = evaluate_full(
+            fwd, norm, store, raw, val_runs, tc.points, device, tc.bf16, lf, res, hetero
+        )
+        (out_dir / "full_val.json").write_text(json.dumps(full, indent=1))
+        final_full = {k: v for k, v in full.items() if k != "per_run"}
     summary = TrainSummary(name, epoch, step, (time.time() - t0) / 3600, best_epoch, best_val,
-                           {k: v for k, v in full.items() if k != "per_run"})  # fmt: skip
+                           final_full)  # fmt: skip
     (out_dir / "summary.json").write_text(json.dumps(summary.__dict__, indent=2))
     log.info("%s: done; best epoch %d, full-mesh val %s", name, best_epoch, summary.final_full_val)
     return summary

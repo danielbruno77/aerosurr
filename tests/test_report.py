@@ -40,6 +40,7 @@ def test_build_report(tmp_path: Path) -> None:
 
     put("pointnet_baseline_v1", fake_eval(rng, test, 0.02))
     put("transolver_main_v1", fake_eval(rng, test, 0.005))
+    put("transolver_main_v1", {"final_full_val": {"cd_mae_counts": 3.0}}, "summary.json")
     for split in ("super_scarce", "scarce", "medium", "full"):
         put(f"transolver_ds_{split}", fake_eval(rng, test, 0.01))
     for n in (11, 25, 50):
@@ -88,7 +89,8 @@ def test_build_report(tmp_path: Path) -> None:
     text = out.read_text()
     for token in ("PhysicsNeMo Transolver", "| 400 |", "LF alone", "Scalar Cd_HF", "Cd (per car)"):
         assert token in text, token
-    for png in ("parity_transolver", "data_efficiency_cd", "mf_cd", "calibration"):
+    assert "selected on `full_val`" in text
+    for png in ("parity_main", "data_efficiency_cd", "mf_cd", "calibration"):
         assert (tmp_path / "docs" / "figures" / f"{png}.png").stat().st_size > 10_000
 
 

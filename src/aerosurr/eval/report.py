@@ -292,14 +292,22 @@ def build_report(runs: Path, store: Path, out_md: Path, fig_dir: Path) -> list[s
             w(summary_row(lab, ev))
         w("")
 
-    main = _load(runs / "transolver_main_v1" / "full_test.json")
+    # The main model is selected on full_val (lowest full-mesh Cd MAE), never on test.
+    main_name, main_label, best_val = None, "", float("inf")
+    for name, label in MODELS[1:]:
+        summ = _load(runs / name / "summary.json")
+        fv = (summ or {}).get("final_full_val")
+        if fv and (runs / name / "full_test.json").is_file() and fv["cd_mae_counts"] < best_val:
+            main_name, main_label, best_val = name, label, fv["cd_mae_counts"]
+    main = _load(runs / main_name / "full_test.json") if main_name else None
     ens = _load(runs / "ensemble_v1" / "ensemble_full_test.json")
     if main:
+        w(f"Main model, selected on `full_val` Cd MAE ({best_val:.2f} counts): **{main_label}**.\n")
         sigma = None
         if ens:
             sigma = {r: v["cd_std_cal"] for r, v in ens["per_run"].items()}
-        title = "PhysicsNeMo Transolver on full_test" + (" (bars: ensemble σ)" if sigma else "")
-        f = fig_parity(main, sigma, fig_dir / "parity_transolver.png", title)
+        title = f"{main_label} on full_test" + (" (bars: ensemble σ)" if sigma else "")
+        f = fig_parity(main, sigma, fig_dir / "parity_main.png", title)
         w(f"![Cd and Cl parity]({rel(f)})\n")
 
     ds_all = {n: _load(runs / f"transolver_ds_{s}" / "full_test.json") for s, n in DS}
