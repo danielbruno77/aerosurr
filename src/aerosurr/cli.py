@@ -180,6 +180,10 @@ def data_download(
     ] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Plan and check disk only.")] = False,
     force: Annotated[bool, typer.Option("--force", help="Ignore the min_free_gb guard.")] = False,
+    min_free_gb: Annotated[
+        float | None,
+        typer.Option(min=0, help="Free-space floor in GB (default: data.yaml), e.g. on CI."),
+    ] = None,
     rehash: Annotated[
         bool, typer.Option("--rehash", help="Re-verify files already in MANIFEST.")
     ] = False,
@@ -192,6 +196,10 @@ def data_download(
     from aerosurr.data.hub import Hub, make_client
 
     paths, cfg = state.paths(), state.data()
+    if min_free_gb is not None:
+        cfg = cfg.model_copy(
+            update={"download": cfg.download.model_copy(update={"min_free_gb": min_free_gb})}
+        )
     bad = [t for t in tier or [] if t not in TIERS]
     if bad:
         raise typer.BadParameter(f"unknown tier(s) {bad}; choose from {TIERS}")

@@ -85,3 +85,20 @@ def test_write_generated_keeps_hand_written_text(tmp_path: Path) -> None:
     write_generated(doc, "v2", "Title")
     text = doc.read_text()
     assert "v2" in text and "v1" not in text and "keep me" in text
+
+
+def test_download_min_free_gb_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--min-free-gb reaches download() through the validated config."""
+    import aerosurr.data.download as dl
+
+    seen: dict[str, float] = {}
+
+    def fake_download(hub: object, cfg: dl.DataConfig, *args: object, **kw: object) -> list[str]:
+        seen["min_free_gb"] = cfg.download.min_free_gb
+        return []
+
+    monkeypatch.setattr(dl, "download", fake_download)
+    res = runner.invoke(app, ["data", "download", "-t", "t2", "--dry-run", "--min-free-gb", "5"])
+    assert res.exit_code == 0, res.output
+    assert seen == {"min_free_gb": 5.0}
+    assert runner.invoke(app, ["data", "download", "--min-free-gb", "-1"]).exit_code != 0

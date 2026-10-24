@@ -63,5 +63,8 @@ jobs:
           path: ${{ env.AEROSURR_DATA }}
           key: drivaerml-run1-5d448b209bf654503c64ce7261c34fa125f46392-v1
       - name: Fetch run_1 (boundary VTP, areas, CSVs, splits); verified, no-op when cached
-        run: uv run --frozen aerosurr data download --tier t0 --tier t2 --runs run_1 --workers 8
+        # Hosted runners have ~90 GB free; the 100 GB floor in data.yaml is for workstation-III.
+        run: >-
+          uv run --frozen aerosurr data download --tier t0 --tier t2 --runs run_1
+          --workers 8 --min-free-gb 5
       - run: uv run --frozen pytest -m data
