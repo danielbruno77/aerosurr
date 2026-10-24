@@ -13,7 +13,7 @@ evaluation files, so this card never carries numbers by hand.
 | Inputs per cell | cell centre (normalised isotropically into ~[-1, 1]), outward unit normal |
 | Outputs per cell | Cp, Cf_x, Cf_y, Cf_z, each standardised with `full_train` statistics |
 | Multi-fidelity variant | `Transolver` plus the coarse-RANS Cp and Cf mapped onto each cell (7 input features); it learns the HF − LF residual. It is compared with an HF-only `Transolver` trained on the same cars, and both keep their final weights because the val cars have no RANS |
-| Uncertainty | Deep ensemble of 5 heteroscedastic `Transolver` members (mean + log-variance, Gaussian NLL), with a per-field temperature fitted on `full_val`. The members were launched before model selection, so the ensemble uses the Transolver family |
+| Uncertainty | **ensemble_v2**, the reported ensemble: 5 heteroscedastic `GeoTransolver` members (mean + log-variance, Gaussian NLL) at the main-model budget, with seeds 100–104 that also change the data order. Temperatures are fitted on `full_val`, one per field and one for Cd. Its mean is also the most accurate Cd predictor here. **ensemble_v1** (5 `Transolver` members at 20k steps) is kept as a baseline |
 | Baselines | In-house PointNet-style model (0.4 M parameters); LF RANS alone; scalar correction Cd_HF = a + b·Cd_LF |
 | Code | `src/aerosurr` (CLI: `aerosurr train run`, `eval run`, `eval ensemble`, `report`) |
 
@@ -80,6 +80,10 @@ See [docs/results.md](docs/results.md):
   constant pressure offset would shift Cl slightly; p∞ = 0 by construction.
 - **Uncertainty is calibrated** on `full_val` (34 cars) in-distribution only.
   Out-of-distribution σ is not validated.
+- **Per-cell σ ranks errors well; per-car σ(Cd) does not.** Per-cell coverage is close
+  to nominal, and σ correlates with the error at Spearman 0.60–0.75. Per-car σ(Cd) has
+  the right average size, but on 50 test cars its rank correlation with the Cd error is
+  indistinguishable from zero. Use it as an error scale, not to flag individual cars.
 
 ## Compute and energy
 

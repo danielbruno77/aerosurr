@@ -39,10 +39,15 @@ training longer.
 - LF alone (coarse RANS mapped onto the HF mesh, 3 test cars): Cp rel L2 0.298, Cd MAE 19.6 counts.
 ## Deep ensemble, calibrated on `full_val`, reported on `full_test`
 
-Reported ensemble: **5 × PhysicsNeMo Transolver, 20k steps** (`ensemble_v1`, 5 members).
+Reported ensemble: **5 × PhysicsNeMo GeoTransolver, main-model budget** (`ensemble_v2`, 5 members).
 
 | Ensemble | Quantity | 50 % | 90 % | 95 % | NLL | Spearman(σ, \|err\|) |
 |---|---|---|---|---|---|---|
+| ensemble_v2 | cp (per cell) | 0.55 | 0.90 | 0.94 | -2.95 | 0.60 |
+| ensemble_v2 | cf_x (per cell) | 0.53 | 0.91 | 0.95 | -7.76 | 0.70 |
+| ensemble_v2 | cf_y (per cell) | 0.53 | 0.91 | 0.95 | -8.16 | 0.74 |
+| ensemble_v2 | cf_z (per cell) | 0.53 | 0.91 | 0.95 | -8.20 | 0.75 |
+| ensemble_v2 | Cd (per car) | 0.64 | 0.88 | 0.92 | – | -0.11 |
 | ensemble_v1 | cp (per cell) | 0.55 | 0.92 | 0.96 | -2.69 | 0.63 |
 | ensemble_v1 | cf_x (per cell) | 0.53 | 0.91 | 0.95 | -7.44 | 0.72 |
 | ensemble_v1 | cf_y (per cell) | 0.53 | 0.91 | 0.95 | -7.79 | 0.75 |
@@ -51,6 +56,10 @@ Reported ensemble: **5 × PhysicsNeMo Transolver, 20k steps** (`ensemble_v1`, 5 
 
 | Ensemble | Members | Ensemble-mean Cd MAE (counts) | Mean calibrated σ(Cd) (counts) | Cd temperature | Aleatoric share |
 |---|---|---|---|---|---|
+| ensemble_v2 (5 × PhysicsNeMo GeoTransolver, main-model budget) | 5 | 1.9 | 3.3 | 2.53 | 91% |
 | ensemble_v1 (5 × PhysicsNeMo Transolver, 20k steps) | 5 | 4.7 | 6.6 | 2.24 | 94% |
+
+**Ensemble-mean forces (ensemble_v2):** Cd MAE 1.9 counts (max 7.7), Cd R² 0.978, over 50 test cars.
+Per-car σ(Cd) is calibrated in coverage, but its rank correlation with the Cd error (-0.11) is indistinguishable from zero at n = 50 (standard error ≈ 0.14): it says how large drag errors are on average, not which cars are worst.
 
 ![Calibration](figures/calibration.png)

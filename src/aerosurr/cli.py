@@ -960,6 +960,10 @@ def viewer_export(
     ] = None,
     cell: Annotated[float, typer.Option(help="Decimation cell size (m).")] = 0.025,
     gpu: Annotated[int, typer.Option(help="Index among CUDA_VISIBLE_DEVICES.")] = 0,
+    calibration: Annotated[
+        Path | None,
+        typer.Option(help="ensemble_*.json whose temperatures scale sigma (calibrated sigma)."),
+    ] = None,
 ) -> None:
     """Decimated cars with HF / predicted Cp, |Cf|, error and sigma for the three.js viewer."""
     import numpy as np
@@ -991,6 +995,10 @@ def viewer_export(
         m.load_state_dict(torch.load(d / "best.pt", map_location=device))
         return m.eval(), mc, tc, cfg["stats"]
 
+    t_cp, t_cd = 1.0, 1.0
+    if calibration is not None:
+        temp = json.loads(calibration.read_text())["temperature"]
+        t_cp, t_cd = float(temp["fields"]["cp"]), float(temp["cd"])
     main, _mc, tc, stats = load(model_dir)
     norm = Normaliser.from_stats(stats)
     ens = [load(d) for d in members or []]
@@ -1014,17 +1022,19 @@ def viewer_export(
             preds = [predict_tensor(m, norm, g["centres"], g["normals"], t.points, t.bf16,
                                     c.heteroscedastic) for m, c, t, _ in ens]  # fmt: skip
             comb = combine([p[0] for p in preds], [p[1] for p in preds])
-            fields["cp_sigma"] = comb.var[:, 0].sqrt().float().cpu().numpy()
+            fields["cp_sigma"] = (t_cp * comb.var[:, 0].sqrt()).float().cpu().numpy()
             cds = [
                 integrate_torch(p[0][:, 0], p[0][:, 1:], a_in, g["centres"], ref).cd for p in preds
             ]
-            cd_sigma = float(np.std(cds))
+            cd_sigma = t_cd * float(np.std(cds))
         surf = read_vtp(paths.data_raw / r / f"boundary_{n}.vtp")
         verts, tris = decimate(surf.points, surf.offsets, surf.connectivity, cell)
         vals = nearest_cell_values(g["centres"].cpu().numpy(), fields, verts)
         meta = {"run": r, "cd_true": index[r].coeffs["varying"]["cd"], "cd_pred": fp.cd,
                 "cl_true": index[r].coeffs["varying"]["cl"], "cl_pred": fp.cl,
-                "cd_sigma": cd_sigma, "model": model_dir.name}  # fmt: skip
+                "cd_sigma": cd_sigma, "model": model_dir.name,
+                "sigma_from": [d.name for d in members or []],
+                "calibrated": calibration is not None}  # fmt: skip
         h = write_bin(out / f"{r}.bin", verts, tris, vals, meta, VIEWER_RANGES)
         cars.append({k: v for k, v in h.items() if k != "header_bytes"} | {"file": f"{r}.b64.txt"})
         typer.echo(f"{r}: {h['n_vertices']:,} vertices, {h['n_triangles']:,} triangles, "

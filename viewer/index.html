@@ -388,7 +388,10 @@ try {
   state.cars = index.cars.map(c => ({ ...c }));
   state.ranges = index.ranges;
   const models = [...new Set(state.cars.map(c => c.model))].join(", ");
-  $("provenance").textContent = `Model checkpoint: ${models}. Field colour ranges are fixed across cars so they compare directly.`;
+  const sig = state.cars[0].sigma_from && state.cars[0].sigma_from.length
+    ? ` σ comes from a ${state.cars[0].sigma_from.length}-member deep ensemble${state.cars[0].calibrated ? ", temperature-calibrated on the validation cars" : ""}.`
+    : "";
+  $("provenance").textContent = `Model checkpoint: ${models}.${sig} Field colour ranges are fixed across cars so they compare directly.`;
   await selectCar(state.cars[0]);
 } catch (err) {
   $("loading").textContent = "Could not load the car data (data/index.json). Re-export with `aerosurr viewer export`.";
