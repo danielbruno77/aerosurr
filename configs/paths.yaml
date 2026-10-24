@@ -1,0 +1,13 @@
+# Filesystem layout (SPEC §8). Relative paths resolve against `workspace`.
+# Env overrides: AEROSURR_WORKSPACE, AEROSURR_DATA (raw dir), AEROSURR_BIND_INTERFACE.
+workspace: ~/aero
+data_raw: data/raw/drivaerml
+data_store: data/store
+runs: runs
+rans: rans
+logs: logs
+
+net:
+  # Bulk downloads bind their sockets to this interface (SO_BINDTODEVICE), bypassing the
+  # slow VPN default route on workstation-III. Empty string = default route (CI).
+  bind_interface: enp97s0

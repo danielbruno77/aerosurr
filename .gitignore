@@ -1,0 +1,29 @@
+# Python / tooling
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Data and run outputs live in ~/aero, never in the repo
+/data/
+/runs/
+*.vtp
+*.vtu
+*.npy
+*.npz
+*.stl
+*.step
+*.zarr/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/

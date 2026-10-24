@@ -1,0 +1,35 @@
+# DrivAerML source and surface-field contract.
+# Field names are copied from `docs/data_inspection.md` (aerosurr data inspect on run_1),
+# never typed from memory.
+source:
+  repo_id: neashton/drivaerml
+  repo_type: dataset
+  revision: 5d448b209bf654503c64ce7261c34fa125f46392
+  endpoint: https://huggingface.co
+  license: CC-BY-SA-4.0
+
+n_runs: 484
+
+fields:
+  association: cell          # all four arrays are CellData; there is no PointData
+  pressure: pMeanTrim        # <f4, kinematic p/rho in m^2/s^2, relative to p_ref = 0 at the outlet
+  pressure_coefficient: CpMeanTrim
+  pressure_fluctuation: pPrime2MeanTrim
+  wall_shear_stress: wallShearStressMeanTrim   # <f4 (n, 3), kinematic (m^2/s^2); sign set by Day-1 force test
+
+freestream:
+  u_inf: 38.889              # m/s; Ashton et al. 2408.11969 App. A; fit p = q*Cp on run_1 gives 38.8890
+  rho_inf: 1.0               # kg/m^3; paper Table 3 (value used for force_mom*.csv)
+  nu: 1.507e-5               # m^2/s; paper App. A (293.15 K)
+  p_inf: 0.0                 # p_ref = 0 at the outlet (paper App. B.2); fit intercept 4e-9
+  pressure_is_kinematic: true
+
+download:
+  # Every prefix of the T2 queue is a usable dataset (SPEC §4.3).
+  priority: [full_test, full_val, super_scarce_train, scarce_train, medium_train, full_train]
+  workers: 4
+  chunk_bytes: 8388608
+  timeout_s: 60
+  max_retries: 8
+  min_free_gb: 100
+  paths_info_batch: 200

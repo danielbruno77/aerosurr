@@ -1,0 +1,113 @@
+[project]
+name = "aerosurr"
+version = "0.1.0"
+description = "Multi-fidelity 3D surface-flow surrogate (Cp, wall shear) on DrivAerML with deep-ensemble uncertainty"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "httpx>=0.28",
+    "numpy>=2.1",
+    "pydantic>=2.9",
+    "pyyaml>=6.0",
+    "rich>=13.9",
+    "scipy>=1.14",
+    "typer>=0.15",
+    "vtk>=9.4",
+]
+
+[project.optional-dependencies]
+# Pick exactly one: `uv sync --extra cu132` on workstation-III, `uv sync --extra cpu` in CI.
+cpu = ["torch==2.14.1"]
+cu132 = ["torch==2.14.1"]
+
+[project.scripts]
+aerosurr = "aerosurr.cli:app"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.18",
+    "pre-commit>=4.0",
+    "pytest>=8.4",
+    "pytest-cov>=7.0",
+    "ruff>=0.14",
+    "types-PyYAML>=6.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.9,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv]
+default-groups = ["dev"]
+conflicts = [[{ extra = "cpu" }, { extra = "cu132" }]]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu132", extra = "cu132" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "NPY", "PTH"]
+ignore = ["B008"]  # typer.Option() in argument defaults is the typer idiom
+allowed-confusables = ["ρ", "−", "×"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/aerosurr"]
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+check_untyped_defs = true
+plugins = ["pydantic.mypy"]
+
+# SPEC §3: strict on config, data/ and physics/ (spelled out: `strict` is not a per-module flag).
+[[tool.mypy.overrides]]
+module = ["aerosurr.config", "aerosurr.data.*", "aerosurr.physics.*"]
+disallow_any_generics = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_decorators = true
+warn_return_any = true
+no_implicit_reexport = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = ["triton", "triton.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["vtkmodules.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers"]
+markers = [
+    "data: needs real DrivAerML files (set AEROSURR_DATA)",
+    "gpu: needs CUDA",
+]
+
+[tool.coverage.run]
+source = ["aerosurr"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

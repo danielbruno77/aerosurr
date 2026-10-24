@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.13.5"
+  # CI has no enp97s0; use the default route.
+  AEROSURR_BIND_INTERFACE: ""
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv sync --frozen --managed-python --extra cpu
+      - run: uv run --frozen ruff check .
+      - run: uv run --frozen ruff format --check .
+      - run: uv run --frozen mypy
+
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv sync --frozen --managed-python --extra cpu
+      - run: uv run --frozen pytest -m "not data and not gpu" --cov --cov-report=term --cov-report=xml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+
+  # Reference checks on real DrivAerML run_1 (SPEC §7). Day 0: the inspection gate and the
+  # Cp/freestream contract. Day 1 adds the reference-force test (SPEC §5.1) to `-m data`.
+  physics:
+    runs-on: ubuntu-24.04
+    needs: test
+    env:
+      AEROSURR_WORKSPACE: ${{ github.workspace }}/../aero
+      AEROSURR_DATA: ${{ github.workspace }}/../aero/data/raw/drivaerml
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv sync --frozen --managed-python --extra cpu
+      - name: Cache DrivAerML run_1 (pinned revision)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.AEROSURR_DATA }}
+          key: drivaerml-run1-5d448b209bf654503c64ce7261c34fa125f46392-v1
+      - name: Fetch run_1 (boundary VTP, areas, CSVs, splits); verified, no-op when cached
+        run: uv run --frozen aerosurr data download --tier t0 --tier t2 --runs run_1 --workers 8
+      - run: uv run --frozen pytest -m data
