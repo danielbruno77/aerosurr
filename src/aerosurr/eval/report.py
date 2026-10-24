@@ -306,23 +306,30 @@ def build_report(runs: Path, store: Path, out_md: Path, fig_dir: Path) -> list[s
     ds = {n: ev for n, ev in ds_all.items() if ev is not None}
     if len(ds) >= 2:
         done.append("data-efficiency")
-        cd = {
-            "Transolver, HF only": [
-                (n, np.abs(np.subtract(*_cd_arrays(ev)[::-1])).mean() * 1000)
-                for n, ev in ds.items()
-            ]
-        }
+
+        def cd_mae(ev: dict[str, Any]) -> float:
+            t, p = _cd_arrays(ev)
+            return float(np.abs(p - t).mean() * 1000)
+
+        cd = {"20k steps (all sizes)": [(n, cd_mae(ev)) for n, ev in ds.items()]}
+        if main:
+            cd["60k steps (main run)"] = [(400, cd_mae(main))]
         f = fig_lines(
             cd,
             fig_dir / "data_efficiency_cd.png",
-            "Data efficiency: Cd error vs training-set size (20k steps each)",
+            "Data efficiency: Cd error vs training-set size",
             "Cd MAE on full_test (counts)",
         )
         w("## Data efficiency (nested official splits)\n")
-        w("| Training runs | Cp rel L2 | Cd MAE (counts) |\n|---|---|---|")
+        w("HF-only Transolver trained on `super_scarce` ⊂ `scarce` ⊂ `medium` ⊂ `full` with")
+        w("the same 20k-step budget each. At that budget the curve flattens beyond ~70 cars:")
+        w("400 cars get only 50 epochs. The main run (400 cars, 60k steps) shows the gain from")
+        w("training longer.\n")
+        w("| Training runs | Steps | Cp rel L2 | Cd MAE (counts) |\n|---|---|---|---|")
         for n, ev in sorted(ds.items()):
-            t, p = _cd_arrays(ev)
-            w(f"| {n} | {ev['rel_l2']['cp']:.3f} | {np.abs(p - t).mean() * 1000:.1f} |")
+            w(f"| {n} | 20k | {ev['rel_l2']['cp']:.3f} | {cd_mae(ev):.1f} |")
+        if main:
+            w(f"| 400 | 60k (main) | {main['rel_l2']['cp']:.3f} | {cd_mae(main):.1f} |")
         w(f"\n![Data efficiency]({rel(f)})\n")
 
     lf_eval = _load(store / LF_DIR / "eval_full_test.json")

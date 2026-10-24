@@ -16,10 +16,18 @@ predicted fields over the native cells (1 count = 0.001 Cd).
 
 ## Data efficiency (nested official splits)
 
-| Training runs | Cp rel L2 | Cd MAE (counts) |
-|---|---|---|
-| 11 | 0.173 | 15.7 |
-| 67 | 0.093 | 6.4 |
+HF-only Transolver trained on `super_scarce` ⊂ `scarce` ⊂ `medium` ⊂ `full` with
+the same 20k-step budget each. At that budget the curve flattens beyond ~70 cars:
+400 cars get only 50 epochs. The main run (400 cars, 60k steps) shows the gain from
+training longer.
+
+| Training runs | Steps | Cp rel L2 | Cd MAE (counts) |
+|---|---|---|---|
+| 11 | 20k | 0.173 | 15.7 |
+| 67 | 20k | 0.093 | 6.4 |
+| 133 | 20k | 0.093 | 5.3 |
+| 400 | 20k | 0.089 | 6.7 |
+| 400 | 60k (main) | 0.064 | 3.9 |
 
 ![Data efficiency](figures/data_efficiency_cd.png)
 
