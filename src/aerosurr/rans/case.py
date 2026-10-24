@@ -265,14 +265,28 @@ functions
         lRef            {ref.l_ref:g};
         Aref            {ref.a_ref:g};
     }}
-    // At the final write: wall shear stress and y+ on the car, then the car surface with
-    // p and wallShearStress as face data (merged across ranks) for LF->HF mapping.
+    // Wall shear on the car every iteration; p and wallShearStress time-averaged over the
+    // last `average_last` iterations (as the forces are); at the final write the car
+    // surface with instantaneous and mean fields (face data, merged) for LF->HF mapping.
     wallShearStress
     {{
         type            wallShearStress;
         libs            (fieldFunctionObjects);
+        executeControl  timeStep;
         writeControl    writeTime;
         patches         ({CAR});
+    }}
+    fieldAverage1
+    {{
+        type            fieldAverage;
+        libs            (fieldFunctionObjects);
+        timeStart       {max(0, it - cfg.solver.average_last)};
+        writeControl    writeTime;
+        fields
+        (
+            p               {{ mean on; prime2Mean off; base time; }}
+            wallShearStress {{ mean on; prime2Mean off; base time; }}
+        );
     }}
     yPlus
     {{
@@ -287,7 +301,7 @@ functions
         writeControl    writeTime;
         surfaceFormat   vtk;
         formatOptions   {{ vtk {{ format binary; }} }}
-        fields          (p wallShearStress yPlus);
+        fields          (p pMean wallShearStress wallShearStressMean yPlus);
         surfaces
         {{
             {CAR}

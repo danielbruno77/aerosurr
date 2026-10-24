@@ -37,8 +37,11 @@ class PointNetBaseline(nn.Module):
 
     def forward(self, pos: torch.Tensor, nrm: torch.Tensor) -> torch.Tensor:
         h = self.local(torch.cat([pos, nrm], dim=-1))  # (B, N, C)
-        g = self.glob(h).amax(dim=1, keepdim=True)  # (B, 1, G)
-        out: torch.Tensor = self.head(torch.cat([h, g.expand(-1, h.shape[1], -1)], dim=-1))
+        # Global max-pool in fp32 via max(dim): under torch.compile + bf16, amax's backward
+        # (which splits the gradient among tied maxima) gave NaN gradients.
+        g = self.glob(h).float().max(dim=1, keepdim=True).values  # (B, 1, G)
+        g = g.to(h.dtype).expand(-1, h.shape[1], -1)
+        out: torch.Tensor = self.head(torch.cat([h, g], dim=-1))
         return out
 
 

@@ -5,8 +5,12 @@ it predicts time-averaged surface Cp and wall shear stress on a full car from ge
 corrects a coarse in-house OpenFOAM RANS towards the dataset's HRLES, and reports
 deep-ensemble uncertainty. The design and the plan are in [SPEC.md](SPEC.md).
 
-**Status: Day 0.** The environment, GPU check, data inspection gate and bulk download are
-done; models come next.
+**Status: Day 1.** Done so far:
+- **Physics gate:** integrated forces from the raw surface fields match DrivAerML's
+  reference CSVs to about 1e-8, on all runs checked.
+- **Compact store:** built and validated for all 484 runs.
+- **Coarse RANS:** 100 cases running, about 8 min each.
+- **Surrogate training:** NVIDIA PhysicsNeMo Transolver.
 
 ## Quick start (workstation-III)
 
@@ -24,10 +28,20 @@ Every capability is a CLI command: `uv run aerosurr --help`.
 | Command | What it does |
 |---|---|
 | `aerosurr env check` | GPU idle check, torch/CUDA build, bf16 GEMM TFLOPS, `torch.compile` smoke test per GPU |
-| `aerosurr data inspect FILE` | every array of a boundary VTP with dtype/shape/stats; `n_cells == len(areas)` gate |
+| `aerosurr env probe` | side-load probe (VTP preprocessing + GPU training steps) on given cores |
 | `aerosurr data download -t t0 -t t2` | resumable, revision-pinned, sha256-verified download, bound to `net.bind_interface` |
 | `aerosurr data status` | per-tier download progress (offline) |
+| `aerosurr data inspect FILE` | every array of a boundary VTP with dtype/shape/stats; `n_cells == len(areas)` gate |
+| `aerosurr data validate` | reference-force gate: integrated Cd/Cl/Cs/Clf/Clr vs `force_mom*_i.csv` |
+| `aerosurr data build-store` | compact training store (pools + full val/test meshes), validating every run |
+| `aerosurr data stats` | normalisation statistics from `full_train` |
+| `aerosurr rans setup/run/batch/summary` | coarse OpenFOAM RANS: case writer, pinned runner, resumable queue, results |
+| `aerosurr train run` | train a PhysicsNeMo Transolver / GeoTransolver or the PointNet baseline |
+| `aerosurr eval run RUN` | full-mesh field and integrated-force errors on `full_test` |
 | `aerosurr config show` | validated `configs/*.yaml` after env overrides |
+
+Reports: `docs/gpu_check.md`, `docs/data_inspection.md`, `docs/physics_validation.md`,
+`docs/rans_benchmark.md`.
 
 ## Layout
 

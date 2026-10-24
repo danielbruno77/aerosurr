@@ -1,0 +1,12 @@
+# Smoke test on the real store: 8 cars, 2 epochs, full-mesh validation at the end.
+split: full
+epochs: 2
+points: 200000
+lr: 0.001
+warmup_epochs: 1
+compile: true
+bf16: true
+data_on_gpu: true
+eval_every: 1
+full_eval_every: 2
+max_train_runs: 8

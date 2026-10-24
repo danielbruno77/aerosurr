@@ -49,10 +49,18 @@ car families, beating SOTA leaderboards. Published baselines are context, not ta
   OpenFOAM never touches. **[VERIFIED 2026-10-24]** with `lscpu -p`: logical CPU
   *c* and *c* + 64 are SMT siblings of physical core *c*; there are 8 CCDs of 8 cores,
   each with its own 32 MB L3 (CCD *k* = cores 8k…8k+7, plus siblings 64+8k…64+8k+7).
-  Starting proposal [PROPOSAL]: case slot A on cores 0–29, slot B on cores 32–61, training
-  and loaders on 30–31 and 62–63 plus their siblings 94–95 and 126–127. The loader cores
-  share the L3 of CCD 3 and CCD 7 with six OpenFOAM ranks each; CCD-aligned slots
-  (24 or 32 ranks) would avoid that.
+  **[DECISION 2026-10-24, measured]** The benchmark in `docs/rans_benchmark.md` set the
+  layout:
+  - **One case at a time, 24 ranks spread 3 per CCD** (CPUs
+    `0-2,8-10,16-18,24-26,32-34,40-42,48-50,56-58`): 0.38 s/iteration on 2 M cells.
+  - simpleFoam is limited by each CCD's memory link. 8 ranks packed on one CCD are 2.7×
+    slower than 8 spread over eight. Two concurrent cases slow each other 3–6×, so
+    2 × 24 CCD-aligned slots (0.88 iterations/s for the machine) and 2 × 16 spread
+    (1.1/s) both lose to a single spread case (2.6/s).
+  - Training, loaders and preprocessing use CCD offsets 3–7: `3-7,11-15,…,59-63` and
+    their siblings.
+  - A memory-heavy job there (the store build, 8 workers) still slows OpenFOAM 1.8×
+    while it runs, so such jobs are kept short and one-off.
 - Training data is preprocessed into a compact store and held in RAM or on the
   GPU, so loaders need ≤ 4 workers per job. Data loading must never compete with
   OpenFOAM for cores.
@@ -197,33 +205,36 @@ single-use edges, all at z = −0.3176 m, give Σ A·n = (0, 0, −0.0157 m²).
 
 - `physics.coefficients`: Cp = (p − p∞)/q∞ and Cf = τ/q∞. Both p and τ are kinematic,
   q∞ = ½U∞² = 756.177 m²/s² and p∞ = 0 (§4.2).
-- `physics.forces`: F = Σ_cells (−(p − p∞) n + τ) A, with moments about
-  `forcesCoR`. Coefficients use `aRef` and `lRef` from `geo_ref_i.csv`. Clf and
-  Clr follow the dataset's convention, the paper's Eq. 33. As read on Day 0 it is
-  Clf = ½Cl + Cm,pitch/l_ref and Clr = ½Cl − Cm,pitch/l_ref, with Cm normalised by
-  q∞·A_ref·l_ref (Eq. 31). The double l_ref looks like an extraction artefact, and the
-  paper's moment-axis naming is ambiguous. So the exact normalisation and sign are
-  **[VERIFY]** against `force_mom_i.csv` on Day 1. Normal orientation
-  and the τ sign are established by the test, not assumed. On run_1 the polygon normals
-  point **into** the car (OpenFOAM: out of the fluid), and mean τ_x < 0 while the flow is
-  +x, i.e. OpenFOAM's `wallShearStress` is the stress on the fluid. Because the surface is
-  open at the tyre contact patches (§4.5), a pressure offset ΔCp shifts Cl by
-  ≈ 0.007 ΔCp; with p∞ = 0 the fields are integrated as stored.
-- **Gate, the physics test:** integrated Cd, Cl, Cs, Clf and Clr from the raw
-  VTP match `force_mom_i.csv` to within **0.5 %** (Cd, Cl) or **0.002 absolute**
-  (Clf, Clr, Cs) on run_1 and 9 other runs (unit test), then on all 484 runs
-  (`aerosurr data validate`, reported in `docs/`). The same check runs with
-  `force_mom_constref_i.csv` and the `*RefRef` values. Any mismatch blocks
-  modelling.
-- Compact store per run: cell centres, unit normals, areas, Cp, Cf (3), as
-  float32 for coordinates and areas and float16 for fields, in a single `.npz`
-  or zarr group. The store also holds a fixed random pool of N points per run
-  for training. The measured cell count is 8.83 M on run_1 **[VERIFIED 2026-10-24]**.
-  That is 36 B per cell (7 × f4 geometry + 4 × f2 fields) = ~0.32 GB per run, or
-  ~154 GB for all 484 runs at full resolution: it fits in RAM (250 GB) but not on one GPU.
-  [PROPOSAL] N = 500 k per run (~18 MB per run, 8.7 GB for `full_train`, which fits on a
-  32 GB GPU).
-  Normalisation statistics come from `full_train` only.
+- `physics.forces` **[VERIFIED 2026-10-24]**: the conventions were established against
+  `force_mom_i.csv` on run_1 and then confirmed on 9 further runs
+  (`tests/test_physics.py`):
+  - The Newell area vectors **a** (native connectivity order) point *into* the car
+    (OpenFOAM: out of the fluid), so the pressure force on the car is +q∞ Σ Cp **a**.
+  - The stored `wallShearStressMeanTrim` is the stress on the *fluid*, so the friction
+    force on the car is −q∞ Σ **Cf** |**a**| (`SHEAR_SIGN = −1`). With +1, Cd comes out
+    19 % low.
+  - Cd, Cs and Cl are Fx, +Fy and Fz over q∞·A_ref. Cm = M/(q∞·A_ref·l_ref) about
+    `forcesCoR`, and **Clf = ½Cl + Cm_pitch, Clr = ½Cl − Cm_pitch**, where Cm_pitch = Cm_y.
+    The paper's "/l_ref" in Eq. 33 is an extraction artefact.
+  - The surface is open at the tyre contact patches (§4.5), so a pressure offset ΔCp would
+    shift Cl by ≈ 0.007 ΔCp. With p∞ = 0 the fields are integrated as stored.
+- **Gate, the physics test** (**passed 2026-10-24**): integrated Cd, Cl, Cs, Clf and Clr
+  from the raw VTP match `force_mom_i.csv` to within **0.5 %** (Cd, Cl; absolute floor
+  1e-4 for near-zero lift) or **0.002 absolute** (Clf, Clr, Cs). This holds on run_1 and
+  9 other runs (unit test), and the same check runs against `force_mom_constref_i.csv`
+  with the `*RefRef` values. Measured errors are ≤ 5e-8, the CSVs' 7-digit precision. All
+  484 runs are checked by `aerosurr data build-store` (or `data validate`) and reported in
+  `docs/physics_validation.md`.
+- Compact store (`aerosurr data build-store`, `~/aero/data/store/v1/`):
+  - Per run, an `.npz` with cell centres (f4), outward unit normals (f4), areas (f4), Cp
+    (f2) and Cf (3 × f2), plus `index.json` with the integrated and reference coefficients.
+  - Every run keeps a fixed random **pool of N = 500 k cells** (seeded by run number) for
+    training. Only the `full_val` and `full_test` runs also keep **all** cells, for
+    full-mesh evaluation.
+  - At 36 B per cell (8.83 M cells on run_1) that is ~27 GB for the 84 full runs plus
+    ~9 GB of pools, versus ~154 GB at full resolution for everything. The raw VTPs remain
+    the source of truth.
+  - Normalisation statistics come from the `full_train` pools only (`aerosurr data stats`).
 
 ### 5.2 Surrogate (GPU 0)
 
@@ -256,8 +267,11 @@ its networks, rather than adopting its Hydra recipes wholesale.
 ### 5.3 Multi-fidelity correction (CPU for RANS, GPU 1 for models) [PROPOSAL]
 
 - **Low fidelity:** OpenFOAM v2506, `snappyHexMesh` from `drivaer_i.stl`, steady
-  `simpleFoam` with k-ω SST and wall functions. Coarse mesh, sized on Day 1 so
-  that one case takes ≤ 45 min at 30 ranks. Boundary conditions match the
+  `simpleFoam` with k-ω SST and wall functions. **[DECISION 2026-10-24, measured]**
+  `coarse` preset: 1.99 M cells, 1000 iterations, forces and surface fields averaged over
+  the last 300. That is ~8 min per case on the layout in §2, and 100 cases take ~13 h.
+  On run_1: Cd 0.3013 against HRLES 0.3035 (−2 counts) and Cl 0.132 against 0.068.
+  The domain is 45 × 20 × 10 m (blockage ~1 %). Boundary conditions match the
   DrivAerML setup, which the paper gives as follows (**[VERIFIED 2026-10-24]**,
   arXiv 2408.11969, Baseline section and App. C):
   - U∞ = 38.889 m/s at the inlet, and p = 0 at the outlet.
@@ -270,7 +284,12 @@ its networks, rather than adopting its Hydra recipes wholesale.
   meshes are in `openfoam_meshes/` (not downloaded).
 - **Subset:** about 100 runs. All 50 `full_test` runs, plus ~50 runs drawn first
   from `scarce_train`. The queue interleaves train and test so that any finished
-  prefix is usable. Two cases run at a time (2 × 30 ranks), in tmux session `aero-rans`.
+  prefix is usable. One case at a time (§2), in tmux session `aero-rans`, window `batch`
+  (`scripts/aero-rans-batch.sh`). The queue is `~/aero/rans/subset_v1.txt`, from
+  `aerosurr.rans.batch.rans_subset`. Each finished case keeps
+  `postProcessing/carSurface/1000/car.vtp` (`pMean`, `wallShearStressMean`, `yPlus`), its
+  forces and logs: ~90 MB. The `processor*` directories are deleted, and the volume is
+  regenerable from the case dictionaries.
 - **Mapping:** LF surface fields are interpolated onto the HF native cell centres
   (KD-tree, inverse-distance weighting) and saved next to the HF store entry.
 - **Models, all compared on the same test runs:**
@@ -373,11 +392,11 @@ its networks, rather than adopting its Hydra recipes wholesale.
 3. ~~GitHub repo~~: resolved, `danielbruno77/aerosurr`, **private** (2026-10-24). It was
    briefly public with machine details scrubbed first. Self-hosted runner: still open (§7).
 4. ~~Model choice~~: resolved, NVIDIA PhysicsNeMo (§5.2).
-5. RANS subset size (~100) and per-case budget (target ≤ 30 min): being measured
-   (`docs/rans_benchmark.md`).
+5. ~~RANS subset and budget~~: resolved by measurement. 100 runs at ~8 min each (target
+   was ≤ 30), ~13 h in all (`docs/rans_benchmark.md`). Running since 2026-10-24 06:38.
 6. ~~Code licence~~: deferred while the repo is private; decide before making it public.
    The data is CC BY-SA 4.0 either way.
-7. CPU slot masks in §2: 2 × 24 CCD-aligned versus 2 × 30, being measured
-   (`docs/rans_benchmark.md`).
+7. ~~CPU slot masks~~: resolved by measurement. One case at a time with 24 ranks spread
+   3 per CCD; training on CCD offsets 3–7 (§2). Two-case layouts lose throughput.
 8. Git identity: no global `user.name` or `user.email` is configured. The Day-0 commit
    was made with `-c` flags only.

@@ -97,7 +97,7 @@ module = ["triton", "triton.*", "physicsnemo.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["vtkmodules.*"]
+module = ["vtkmodules.*", "scipy.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

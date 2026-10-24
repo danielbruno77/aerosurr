@@ -198,3 +198,28 @@ def test_log_parsers(tmp_path: Path) -> None:
         "Cd,Cl,Clf,Clr,Cs\n3.035117e-01,6.772802e-02,-3.728616e-02,1.050142e-01,4.766758e-02\n"
     )
     assert read_force_mom(fm)["Cd"] == pytest.approx(0.3035117)
+
+
+def test_idw_and_lf_surface(tmp_path: Path) -> None:
+    from aerosurr.rans.mapping import idw, read_lf_surface
+
+    from .conftest import CUBE_FACES, CUBE_POINTS, write_vtp
+
+    src = np.random.default_rng(0).normal(size=(50, 3))
+    vals = np.column_stack([src[:, 0], src**2])
+    out, dist = idw(src, vals, src, k=4)  # at the source points: exact
+    np.testing.assert_allclose(out, vals, rtol=1e-5, atol=1e-6)
+    assert dist.max() < 1e-6
+    mid, _ = idw(np.array([[0.0, 0, 0], [1.0, 0, 0]]), np.array([[0.0], [2.0]]),
+                 np.array([[0.5, 0, 0]]), k=2)  # fmt: skip
+    assert mid[0, 0] == pytest.approx(1.0)
+
+    n = len(CUBE_FACES)
+    q = 756.17716
+    vtp = write_vtp(tmp_path / "car.vtp", CUBE_POINTS, CUBE_FACES, {
+        "p": np.zeros(n, np.float32), "pMean": np.full(n, q, np.float32),
+        "wallShearStressMean": np.tile(np.array([q, 0, 0], np.float32), (n, 1)),
+    })  # fmt: skip
+    centres, fields = read_lf_surface(vtp, q)
+    assert centres.shape == (n, 3) and fields.shape == (n, 4)
+    np.testing.assert_allclose(fields, np.tile([1.0, 1.0, 0, 0], (n, 1)), rtol=1e-6)

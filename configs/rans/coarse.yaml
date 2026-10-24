@@ -39,7 +39,7 @@ mesh_presets:
       - {name: near, min: [-1.0, -1.25, -0.5], max: [5.5, 1.25, 1.5], level: 4}
 
 solver:
-  iterations: 1500
+  iterations: 1000           # Cd within ±1.5 counts of its final value from ~300 it, Cl by ~1000 (run_1, P1)
   average_last: 300          # force coefficients are averaged over the last 300 iterations
   turbulence_intensity: 0.005
   viscosity_ratio: 10.0
