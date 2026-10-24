@@ -860,6 +860,19 @@ def eval_run(
     typer.echo(json.dumps({k: v for k, v in res.items() if k != "per_run"}, indent=2))
 
 
+@app.command()
+def report(
+    out: Annotated[Path, typer.Option(help="Markdown report.")] = Path("docs/results.md"),
+    figures: Annotated[Path, typer.Option(help="Figure directory.")] = Path("docs/figures"),
+) -> None:
+    """Results tables and figures from the evaluations that exist so far."""
+    from aerosurr.eval.report import build_report
+
+    paths, data = state.paths(), state.data()
+    done = build_report(paths.runs, paths.data_store / data.store.version, out, figures)
+    typer.echo(f"{out}: sections {done or 'none yet'}")
+
+
 # --------------------------------------------------------------------------- viewer
 
 #: Fixed colour-map ranges, so every car is shown on the same scale.
