@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from aerosurr.data.store import StoreEntry, save_index
 from aerosurr.eval.report import build_report, scalar_correction
@@ -47,6 +48,9 @@ def test_build_report(tmp_path: Path) -> None:
         put(f"mf_n{n}", fake_eval(rng, test, 0.004))
         put(f"hf_n{n}", fake_eval(rng, test, 0.008))
         put(f"mf_n{n}", {"train_runs": train}, "config.json")
+    for sfx in ("_s1", "_s2"):  # extra seeds at N=11 only: the table mixes 3 and 1 seeds
+        put(f"mf_n11{sfx}", fake_eval(rng, test, 0.004))
+        put(f"hf_n11{sfx}", fake_eval(rng, test, 0.008))
     cov = {q: {f: float(q) for f in ("cp", "cf_x", "cf_y", "cf_z")} for q in ("0.5", "0.9", "0.95")}
     cd_cov = {"0.5": 0.5, "0.9": 0.88, "0.95": 0.94}
     put(
@@ -106,6 +110,7 @@ def test_build_report(tmp_path: Path) -> None:
     for token in ("PhysicsNeMo Transolver", "| 400 |", "LF alone", "Scalar Cd_HF", "Cd (per car)"):
         assert token in text, token
     assert "selected on `full_val`" in text
+    assert "MF − HF-only per seed" in text and " ± " in text and "**Result:** Cd MAE:" in text
     assert (
         "| ensemble_v1 | epistemic, raw | 1 | 4.5 | 0.50 | 0.88 | 0.94 | +0.10 [-0.20, +0.40] |"
         in text
@@ -125,3 +130,17 @@ def test_scalar_correction_recovers_a_linear_map() -> None:
     hf = {k: entry(k, v["coeffs"]["Cd"]) for k, v in lf.items()}
     res = scalar_correction(lf, hf, [f"r{i}" for i in range(6)], [f"r{i}" for i in range(6, 10)])
     assert abs(res["b"] - 1.1) < 1e-9 and res["cd_mae_counts"] < 1e-6 < res["cd_raw_lf_mae_counts"]
+
+
+def test_seed_stats_and_paired_verdict() -> None:
+    from aerosurr.eval.report import paired_verdict, seed_stats
+
+    st = seed_stats([1.0, 2.0, 3.0])
+    assert st == {"mean": 2.0, "std": 1.0, "min": 1.0, "max": 3.0, "n": 3}  # ddof 1
+    assert seed_stats([4.0])["std"] == 0.0
+    win = paired_verdict([5.0, 5.2, 5.1], [8.0, 8.3, 8.1])
+    assert win["verdict"] == "MF better" and win["diff"][0] == pytest.approx(-3.0)
+    assert paired_verdict([8.0, 8.3, 8.1], [5.0, 5.2, 5.1])["verdict"] == "HF-only better"
+    assert paired_verdict([5.0, 7.0, 6.0], [6.5, 8.0, 7.2])["verdict"] == "within seed spread"
+    one = paired_verdict([5.0, None, None], [6.0, None, None])
+    assert one["verdict"] == "single seed" and one["diff"] == [-1.0, None, None]

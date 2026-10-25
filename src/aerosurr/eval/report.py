@@ -143,8 +143,10 @@ def fig_lines(
     title: str,
     ylabel: str,
     reference: tuple[str, float] | None = None,
+    bars: dict[str, list[tuple[int, float, float]]] | None = None,
 ) -> Path:
-    """Error versus number of HF training runs (log x); up to 3 series, direct-labelled."""
+    """Error versus number of HF training runs (log x); up to 3 series, direct-labelled.
+    `bars`: per series, (x, low, high) drawn as vertical range bars (e.g. min-max over seeds)."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -159,11 +161,20 @@ def fig_lines(
     ax.xaxis.set_minor_formatter(NullFormatter())
     ax.set_xticks(xs)
     ax.set_xticklabels([str(v) for v in xs])
-    ymax = max([v for pts in series.values() for _, v in pts] + [reference[1] if reference else 0])
+    bars = bars or {}
+    highs = [hi for b in bars.values() for _, _, hi in b]
+    ymax = max(
+        [v for pts in series.values() for _, v in pts] + highs + [reference[1] if reference else 0]
+    )
     ax.set_ylim(0, ymax * 1.15)
-    for (name, pts), color in zip(series.items(), SERIES, strict=False):
+    for k, ((name, pts), color) in enumerate(zip(series.items(), SERIES, strict=False)):
         pts = sorted(pts)
-        x, y = [p[0] for p in pts], [p[1] for p in pts]
+        shift = 1.0 + 0.035 * (k - (len(series) - 1) / 2) if bars else 1.0  # keep bars apart
+        x, y = [p[0] * shift for p in pts], [p[1] for p in pts]
+        if name in bars:
+            for bx, lo, hi in bars[name]:
+                ax.plot([bx * shift] * 2, [lo, hi], color=color, linewidth=1.5, alpha=0.6)
+                ax.plot([bx * shift] * 2, [lo, hi], "_", color=color, ms=8, alpha=0.6)
         ax.plot(x, y, "-o", color=color, linewidth=2, ms=7, mec=SURFACE, mew=1.5, label=name)
         ax.annotate(
             name.split(" (")[0],
@@ -268,6 +279,50 @@ MODELS = (
 )
 DS = (("super_scarce", 11), ("scarce", 67), ("medium", 133), ("full", 400))
 MF_N = (11, 25, 50)
+MF_SEEDS = ("", "_s1", "_s2")  # run-name suffix per seed; seed 0 is the original mf_n<N>
+MF_QUANTITIES = ("cd", "cp", "cf_x", "cf_y", "cf_z")
+
+
+def mf_metric(ev: dict[str, Any], q: str) -> float:
+    """Cd MAE in counts, or the area-weighted relative L2 of a field."""
+    if q == "cd":
+        t, p = _cd_arrays(ev)
+        return float(np.abs(p - t).mean() * 1000)
+    return float(ev["rel_l2"][q])
+
+
+def seed_stats(vals: list[float]) -> dict[str, float]:
+    """Mean, std (ddof 1; 0 for one seed), min and max over seeds."""
+    a = np.asarray(vals, dtype=np.float64)
+    return {
+        "mean": float(a.mean()),
+        "std": float(a.std(ddof=1)) if len(a) > 1 else 0.0,
+        "min": float(a.min()),
+        "max": float(a.max()),
+        "n": len(a),
+    }
+
+
+def paired_verdict(mf: list[float | None], hf: list[float | None]) -> dict[str, Any]:
+    """MF - HF-only per seed (lower is better). A winner only if the two models' seed
+    ranges do not overlap and the paired difference has the same sign in every seed."""
+    pairs = [(m, h) for m, h in zip(mf, hf, strict=True) if m is not None and h is not None]
+    d = [m - h for m, h in pairs]
+    out: dict[str, Any] = {
+        "diff": [None if m is None or h is None else m - h for m, h in zip(mf, hf, strict=True)]
+    }
+    if len(d) < 2:
+        return out | {"mean": d[0] if d else None, "std": None, "verdict": "single seed"}
+    ms, hs = [m for m, _ in pairs], [h for _, h in pairs]
+    overlap = max(min(ms), min(hs)) <= min(max(ms), max(hs))
+    same_sign = all(x < 0 for x in d) or all(x > 0 for x in d)
+    if not overlap and same_sign:
+        verdict = "MF better" if d[0] < 0 else "HF-only better"
+    else:
+        verdict = "within seed spread"
+    return out | {"mean": float(np.mean(d)), "std": float(np.std(d, ddof=1)), "verdict": verdict}
+
+
 #: Reported ensemble first; earlier ones stay in the tables as baselines.
 ENSEMBLES = (
     ("ensemble_v2", "5 × PhysicsNeMo GeoTransolver, main-model budget"),
@@ -511,8 +566,14 @@ def build_report(runs: Path, store: Path, out_md: Path, fig_dir: Path) -> list[s
 
     lf_eval = _load(store / LF_DIR / "eval_full_test.json")
     lf_index = _load(store / LF_DIR / "index.json")
-    mf = {n: _load(runs / f"mf_n{n}" / "full_test.json") for n in MF_N}
-    hf = {n: _load(runs / f"hf_n{n}" / "full_test.json") for n in MF_N}
+    # seeds[m][n]: the full_test evaluations of model m at N cars, one per seed (or None)
+    seeds = {
+        m: {
+            n: [_load(runs / f"{m}_n{n}{sfx}" / "full_test.json") for sfx in MF_SEEDS] for n in MF_N
+        }
+        for m in ("mf", "hf")
+    }
+    mf = {n: seeds["mf"][n][0] for n in MF_N}
     if any(mf.values()) or lf_eval:
         done.append("multi-fidelity")
         w("## Multi-fidelity correction (coarse RANS → HRLES)\n")
@@ -522,52 +583,119 @@ def build_report(runs: Path, store: Path, out_md: Path, fig_dir: Path) -> list[s
                 f"Cp rel L2 {lf_eval['rel_l2']['cp']:.3f}, "
                 f"Cd MAE {lf_eval['cd_mae_counts']:.1f} counts."
             )
-        series: dict[str, list[tuple[int, float]]] = {
-            "HF only": [],
-            "MF (LF inputs, residual)": [],
-            "Scalar Cd_HF = a + b·Cd_LF": [],
-        }
+
+        def vals(m: str, n: int, q: str) -> list[float | None]:
+            return [mf_metric(ev, q) if ev else None for ev in seeds[m][n]]
+
+        def fmt(v: list[float | None], digits: int) -> str:
+            got = [x for x in v if x is not None]
+            if not got:
+                return "–"
+            st = seed_stats(got)
+            if st["n"] == 1:
+                return f"{st['mean']:.{digits}f}"
+            return (
+                f"{st['mean']:.{digits}f} ± {st['std']:.{digits}f} "
+                f"[{st['min']:.{digits}f}, {st['max']:.{digits}f}]"
+            )
+
+        def fmt_diff(pv: dict[str, Any], digits: int) -> str:
+            return " / ".join("–" if d is None else f"{d:+.{digits}f}" for d in pv["diff"])
+
         sidx = load_index(store)
+        scalar: dict[int, float] = {}
         for n in MF_N:
-            for key, res in (("HF only", hf[n]), ("MF (LF inputs, residual)", mf[n])):
-                if res:
-                    t, p = _cd_arrays(res)
-                    series[key].append((n, float(np.abs(p - t).mean() * 1000)))
             cfg = _load(runs / f"mf_n{n}" / "config.json")
             mf_n = mf[n]
             if cfg and lf_index and mf_n:
                 sc = scalar_correction(lf_index, sidx, cfg["train_runs"], list(mf_n["per_run"]))
-                series["Scalar Cd_HF = a + b·Cd_LF"].append((n, sc["cd_mae_counts"]))
-        series = {k: v for k, v in series.items() if v}
-        if series:
-            n_cars = len(next(r for r in (*hf.values(), *mf.values()) if r)["per_run"])
+                scalar[n] = sc["cd_mae_counts"]
+        present = [ev for m in seeds for n in MF_N for ev in seeds[m][n] if ev]
+        if present:
+            n_cars = len(present[0]["per_run"])
+            n_seeds = min(sum(ev is not None for ev in seeds[m][n]) for m in seeds for n in MF_N)
+            verdicts: dict[str, dict[int, str]] = {q: {} for q in MF_QUANTITIES}
+            for q in MF_QUANTITIES:
+                for n in MF_N:
+                    verdicts[q][n] = paired_verdict(vals("mf", n, q), vals("hf", n, q))["verdict"]
             w(
-                f"\nCd MAE (counts) on the {n_cars} LF-mapped `full_test` cars, by number of "
-                "training cars (each model is one seed):\n"
+                f"\nEvery model is evaluated on the same {n_cars} LF-mapped `full_test` cars. "
+                f"Values are mean ± std (ddof 1) [min, max] over {n_seeds} seed(s); a seed sets "
+                "the initialisation and the data order. Every seed uses the same nested "
+                "training cars, so the variation across training subsets is not covered. "
+                "MF − HF-only is paired by seed (seeds 0 / 1 / 2; negative = MF better). The "
+                "verdict names a winner only when the two models' seed ranges do not overlap "
+                "and the paired difference has the same sign in every seed; otherwise the "
+                "difference is *within seed spread*. LF alone and the scalar correction are "
+                "deterministic for a given set of training cars, so they are single values.\n"
             )
-            w("| Training runs | " + " | ".join(series) + " |\n|---|" + "---|" * len(series))
+
+            def grouped(v: dict[int, str]) -> str:
+                by: dict[str, list[int]] = {}
+                for k, verdict in v.items():
+                    by.setdefault(verdict, []).append(k)
+                parts = []
+                for verdict, ns in by.items():
+                    lst = ", ".join(map(str, ns[:-1])) + " and " if len(ns) > 1 else ""
+                    parts.append(f"{verdict} at {lst}{ns[-1]} cars")
+                return ", ".join(parts)
+
+            labels = {"cd": "Cd MAE", "cp": "Cp", "cf_x": "Cf_x", "cf_y": "Cf_y", "cf_z": "Cf_z"}
+            w(
+                "**Result:** "
+                + "; ".join(f"{labels[q]}: {grouped(verdicts[q])}" for q in MF_QUANTITIES)
+                + ".\n"
+            )
+            w("Cd MAE (counts):\n")
+            w(
+                "| Training cars | HF only | MF (LF inputs, residual) | MF − HF-only per seed "
+                "| Mean difference | Verdict | Scalar Cd_HF = a + b·Cd_LF |"
+            )
+            w("|---|---|---|---|---|---|---|")
             for n in MF_N:
-                vals = [
-                    next((f"{v:.1f}" for m, v in pts if m == n), "–") for pts in series.values()
-                ]
-                w(f"| {n} | " + " | ".join(vals) + " |")
-            w("\nField errors (area-weighted relative L2, same cars):\n")
-            w("| Training runs | Model | Cp | Cf_x | Cf_y | Cf_z |\n|---|---|---|---|---|---|")
+                pv = paired_verdict(vals("mf", n, "cd"), vals("hf", n, "cd"))
+                mdiff = "–" if pv["mean"] is None else f"{pv['mean']:+.1f}"
+                sc_v = f"{scalar[n]:.1f}" if n in scalar else "–"
+                w(
+                    f"| {n} | {fmt(vals('hf', n, 'cd'), 1)} | {fmt(vals('mf', n, 'cd'), 1)} | "
+                    f"{fmt_diff(pv, 1)} | {mdiff} | {pv['verdict']} | {sc_v} |"
+                )
+            w("\nField errors (area-weighted relative L2):\n")
+            w(
+                "| Training cars | Field | HF only | MF | MF − HF-only per seed | Mean difference "
+                "| Verdict |"
+            )
+            w("|---|---|---|---|---|---|---|")
             for n in MF_N:
-                for lab, res in (("HF only", hf[n]), ("MF", mf[n])):
-                    if res:
-                        rl = res["rel_l2"]
-                        w(
-                            f"| {n} | {lab} | {rl['cp']:.3f} | {rl['cf_x']:.3f} | "
-                            f"{rl['cf_y']:.3f} | {rl['cf_z']:.3f} |"
-                        )
+                for q in MF_QUANTITIES[1:]:
+                    pv = paired_verdict(vals("mf", n, q), vals("hf", n, q))
+                    mdiff = "–" if pv["mean"] is None else f"{pv['mean']:+.3f}"
+                    w(
+                        f"| {n} | {q} | {fmt(vals('hf', n, q), 3)} | {fmt(vals('mf', n, q), 3)} | "
+                        f"{fmt_diff(pv, 3)} | {mdiff} | {pv['verdict']} |"
+                    )
+            series: dict[str, list[tuple[int, float]]] = {}
+            bars: dict[str, list[tuple[int, float, float]]] = {}
+            for m, lab in (("hf", "HF only"), ("mf", "MF (LF inputs, residual)")):
+                for n in MF_N:
+                    got = [x for x in vals(m, n, "cd") if x is not None]
+                    if got:
+                        st = seed_stats(got)
+                        series.setdefault(lab, []).append((n, st["mean"]))
+                        if st["n"] > 1:
+                            bars.setdefault(lab, []).append((n, st["min"], st["max"]))
+            if scalar:
+                series["Scalar Cd_HF = a + b·Cd_LF"] = sorted(scalar.items())
             ref = ("LF alone", lf_eval["cd_mae_counts"]) if lf_eval else None
             f = fig_lines(
                 series,
                 fig_dir / "mf_cd.png",
-                "Cd error vs HF training runs",
+                f"Cd error vs HF training runs (mean; bars: min–max over {n_seeds} seeds)"
+                if bars
+                else "Cd error vs HF training runs",
                 "Cd MAE on LF-mapped test cars (counts)",
                 ref,
+                bars,
             )
             w(f"\n![Multi-fidelity]({rel(f)})\n")
 
