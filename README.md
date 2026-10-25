@@ -18,8 +18,12 @@ claude.ai artifact.
 ![Cd and Cl parity on full_test](docs/figures/parity_main.png)
 
 **Status: Day 1 done.** Every one of the 484 runs passes the physics gate (integrated
-forces match DrivAerML's reference CSVs to ≤ 8e-7). The coarse RANS batch, deep ensemble
-and MF study are running.
+forces match DrivAerML's reference CSVs to ≤ 8e-7). The 100-case coarse RANS batch, the
+deep ensemble and the MF study are done. Feeding RANS fields into the network did not
+pay off: the MF model's field errors are higher than an HF-only model's at 11, 25 and
+50 training cars, and its drag is better only at 11 cars. A scalar Cd correction of the
+RANS beats HF-only up to 25 cars. An out-of-distribution check on the `geometry` split
+is running.
 
 ## Quick start (workstation-III)
 

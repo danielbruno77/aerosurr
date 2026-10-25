@@ -36,7 +36,29 @@ training longer.
 
 ## Multi-fidelity correction (coarse RANS → HRLES)
 
-- LF alone (coarse RANS mapped onto the HF mesh, 3 test cars): Cp rel L2 0.298, Cd MAE 19.6 counts.
+- LF alone (coarse RANS mapped onto the HF mesh, 50 test cars): Cp rel L2 0.303, Cd MAE 8.8 counts.
+
+Cd MAE (counts) on the 50 LF-mapped `full_test` cars, by number of training cars (each model is one seed):
+
+| Training runs | HF only | MF (LF inputs, residual) | Scalar Cd_HF = a + b·Cd_LF |
+|---|---|---|---|
+| 11 | 15.1 | 8.5 | 10.9 |
+| 25 | 9.5 | 12.9 | 8.3 |
+| 50 | 6.2 | 9.2 | 8.3 |
+
+Field errors (area-weighted relative L2, same cars):
+
+| Training runs | Model | Cp | Cf_x | Cf_y | Cf_z |
+|---|---|---|---|---|---|
+| 11 | HF only | 0.167 | 0.177 | 0.329 | 0.292 |
+| 11 | MF | 0.174 | 0.209 | 0.413 | 0.343 |
+| 25 | HF only | 0.117 | 0.129 | 0.253 | 0.216 |
+| 25 | MF | 0.137 | 0.166 | 0.334 | 0.280 |
+| 50 | HF only | 0.097 | 0.113 | 0.223 | 0.186 |
+| 50 | MF | 0.114 | 0.137 | 0.275 | 0.228 |
+
+![Multi-fidelity](figures/mf_cd.png)
+
 ## Deep ensemble, calibrated on `full_val`, reported on `full_test`
 
 Reported ensemble: **5 × PhysicsNeMo GeoTransolver, main-model budget** (`ensemble_v2`, 5 members).

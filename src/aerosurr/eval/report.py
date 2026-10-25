@@ -492,12 +492,27 @@ def build_report(runs: Path, store: Path, out_md: Path, fig_dir: Path) -> list[s
                 series["Scalar Cd_HF = a + b·Cd_LF"].append((n, sc["cd_mae_counts"]))
         series = {k: v for k, v in series.items() if v}
         if series:
-            w("\n| Training runs | " + " | ".join(series) + " |\n|---|" + "---|" * len(series))
+            n_cars = len(next(r for r in (*hf.values(), *mf.values()) if r)["per_run"])
+            w(
+                f"\nCd MAE (counts) on the {n_cars} LF-mapped `full_test` cars, by number of "
+                "training cars (each model is one seed):\n"
+            )
+            w("| Training runs | " + " | ".join(series) + " |\n|---|" + "---|" * len(series))
             for n in MF_N:
                 vals = [
                     next((f"{v:.1f}" for m, v in pts if m == n), "–") for pts in series.values()
                 ]
                 w(f"| {n} | " + " | ".join(vals) + " |")
+            w("\nField errors (area-weighted relative L2, same cars):\n")
+            w("| Training runs | Model | Cp | Cf_x | Cf_y | Cf_z |\n|---|---|---|---|---|---|")
+            for n in MF_N:
+                for lab, res in (("HF only", hf[n]), ("MF", mf[n])):
+                    if res:
+                        rl = res["rel_l2"]
+                        w(
+                            f"| {n} | {lab} | {rl['cp']:.3f} | {rl['cf_x']:.3f} | "
+                            f"{rl['cf_y']:.3f} | {rl['cf_z']:.3f} |"
+                        )
             ref = ("LF alone", lf_eval["cd_mae_counts"]) if lf_eval else None
             f = fig_lines(
                 series,
