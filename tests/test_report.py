@@ -69,6 +69,18 @@ def test_build_report(tmp_path: Path) -> None:
         },
         "ensemble_full_test.json",
     )
+    row = {
+        "coverage": cd_cov,
+        "sigma_mean_counts": 4.5,
+        "spearman": 0.1,
+        "spearman_ci95": [-0.2, 0.4],
+        "n": len(test),
+    }
+    put(
+        "ensemble_v1",
+        {"ddof": 0, "temperature": 2.0, "current": row, "raw": row, "calibrated": row},
+        "per_car_sigma.json",
+    )
     coeffs = {"varying": {"cd": 0.3}, "constant": {"cd": 0.3}}
     store.mkdir(parents=True)
     save_index(
@@ -94,6 +106,10 @@ def test_build_report(tmp_path: Path) -> None:
     for token in ("PhysicsNeMo Transolver", "| 400 |", "LF alone", "Scalar Cd_HF", "Cd (per car)"):
         assert token in text, token
     assert "selected on `full_val`" in text
+    assert (
+        "| ensemble_v1 | epistemic, raw | 1 | 4.5 | 0.50 | 0.88 | 0.94 | +0.10 [-0.20, +0.40] |"
+        in text
+    )
     for png in ("parity_main", "data_efficiency_cd", "mf_cd", "calibration"):
         assert (tmp_path / "docs" / "figures" / f"{png}.png").stat().st_size > 10_000
 

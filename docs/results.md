@@ -62,4 +62,15 @@ Reported ensemble: **5 × PhysicsNeMo GeoTransolver, main-model budget** (`ensem
 **Ensemble-mean forces (ensemble_v2):** Cd MAE 1.9 counts (max 7.7), Cd R² 0.978, over 50 test cars.
 Per-car σ(Cd) is calibrated in coverage, but its rank correlation with the Cd error (-0.11) is indistinguishable from zero at n = 50 (standard error ≈ 0.14): it says how large drag errors are on average, not which cars are worst.
 
-![Calibration](figures/calibration.png)
+### Per-car Cd uncertainty, like for like (`full_test`, 50 cars)
+
+σ_epi(Cd) is the std over members of each member's integrated Cd (ddof = 0); the error is the ensemble-mean Cd minus HRLES. Calibrated rows use one temperature fitted on `full_val`. In this pipeline the reported per-car σ(Cd) already is that member spread (the aleatoric share above is per-cell field variance), so the *current* and *epistemic, calibrated* rows must coincide; the second recomputes it from saved per-member Cd, and here they do. Spearman CIs are percentile bootstraps over cars (10,000).
+
+| Ensemble | σ(Cd) | Temperature | Mean σ (counts) | 50 % | 90 % | 95 % | Spearman(σ, \|err\|) [95 % CI] |
+|---|---|---|---|---|---|---|---|
+| ensemble_v2 | current (reported above) | 2.53 | 3.3 | 0.64 | 0.88 | 0.92 | -0.11 [-0.42, +0.20] |
+| ensemble_v2 | epistemic, raw | 1 | 1.3 | 0.36 | 0.64 | 0.70 | -0.11 [-0.42, +0.20] |
+| ensemble_v2 | epistemic, calibrated | 2.53 | 3.3 | 0.64 | 0.88 | 0.92 | -0.11 [-0.42, +0.20] |
+| ensemble_v1 | current (reported above) | 2.24 | 6.6 | 0.48 | 0.94 | 0.98 | +0.19 [-0.09, +0.45] |
+| ensemble_v1 | epistemic, raw | 1 | 2.9 | 0.30 | 0.50 | 0.60 | +0.19 [-0.09, +0.45] |
+| ensemble_v1 | epistemic, calibrated | 2.24 | 6.6 | 0.48 | 0.94 | 0.98 | +0.19 [-0.09, +0.45] |

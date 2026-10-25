@@ -130,9 +130,17 @@ def evaluate_ensemble(
                 lf = None
                 if cfg.lf_inputs:
                     lf = torch.from_numpy(load_lf(store, r, "full")).to(device)
-                mu, var = predict_tensor(model, norm, g["centres"], g["normals"], chunk, bf16,
-                                         cfg.heteroscedastic, lf=lf,
-                                         residual=cfg.predict_residual)  # fmt: skip
+                mu, var = predict_tensor(
+                    model,
+                    norm,
+                    g["centres"],
+                    g["normals"],
+                    chunk,
+                    bf16,
+                    cfg.heteroscedastic,
+                    lf=lf,
+                    residual=cfg.predict_residual,
+                )
                 means.append(mu)
                 variances.append(var)
                 cds.append(integrate_torch(mu[:, 0], mu[:, 1:], a_in, g["centres"], ref).cd)
@@ -188,4 +196,111 @@ def evaluate_ensemble(
             r: {"cd_mean": m, "cd_std_cal": t_cd * sd, "cd_true": t}
             for r, m, sd, t in zip(test_runs, test.cd_mean, test.cd_std, test.cd_true, strict=True)
         },
+    }
+
+
+# --------------------------------------------------------------------------- per-car Cd check
+
+
+def member_forces(
+    members: list[tuple[ModelFn, ModelConfig]],
+    norm: Normaliser,
+    store: Path,
+    raw: Path,
+    runs: list[str],
+    chunk: int,
+    bf16: bool,
+    device: torch.device,
+) -> dict[str, dict[str, Any]]:
+    """Each member's integrated Cd and Cl per run (from its mean field), plus the truth."""
+    index = load_index(store)
+    out: dict[str, dict[str, Any]] = {}
+    for r in runs:
+        g = {k: torch.from_numpy(v).to(device) for k, v in load_group(store, r, "full").items()}
+        a_in = -g["normals"].double() * g["areas"].double()[:, None]
+        ref = read_geo_refs(raw / r / f"geo_ref_{run_number(r)}.csv").varying
+        cd, cl = [], []
+        for model, cfg in members:
+            lf = torch.from_numpy(load_lf(store, r, "full")).to(device) if cfg.lf_inputs else None
+            mu, _ = predict_tensor(
+                model,
+                norm,
+                g["centres"],
+                g["normals"],
+                chunk,
+                bf16,
+                cfg.heteroscedastic,
+                lf=lf,
+                residual=cfg.predict_residual,
+            )
+            f = integrate_torch(mu[:, 0], mu[:, 1:], a_in, g["centres"], ref)
+            cd.append(f.cd)
+            cl.append(f.cl)
+        out[r] = {
+            "cd_members": cd,
+            "cl_members": cl,
+            "cd_true": float(index[r].coeffs["varying"]["cd"]),
+            "cl_true": float(index[r].coeffs["varying"]["cl"]),
+        }
+        del g
+    return out
+
+
+def _spearman_ci(
+    sigma: NDArray[np.float64], abs_err: NDArray[np.float64], n_boot: int, seed: int
+) -> tuple[float, float, float]:
+    """Spearman(sigma, |err|) and a percentile bootstrap 95 % CI over cars."""
+    rho = spearman(sigma, abs_err)
+    rng = np.random.default_rng(seed)
+    n = len(sigma)
+    boots = []
+    for _ in range(n_boot):
+        i = rng.integers(0, n, n)
+        if np.ptp(sigma[i]) > 0 and np.ptp(abs_err[i]) > 0:
+            boots.append(spearman(sigma[i], abs_err[i]))
+    lo, hi = np.percentile(boots, [2.5, 97.5])
+    return rho, float(lo), float(hi)
+
+
+def sigma_row(
+    sigma: NDArray[np.float64], err: NDArray[np.float64], n_boot: int = 10_000, seed: int = 0
+) -> dict[str, Any]:
+    """Coverage, mean sigma (counts) and Spearman with a bootstrap CI, for per-car Cd."""
+    rho, lo, hi = _spearman_ci(sigma, np.abs(err), n_boot, seed)
+    return {
+        "coverage": {str(q): float(np.mean(np.abs(err) <= Z[q] * sigma)) for q in Z},
+        "sigma_mean_counts": float(sigma.mean() * 1000),
+        "spearman": rho,
+        "spearman_ci95": [lo, hi],
+        "n": len(sigma),
+    }
+
+
+def per_car_cd_check(
+    val: dict[str, dict[str, Any]],
+    test: dict[str, dict[str, Any]],
+    ddof: int = 0,
+    n_boot: int = 10_000,
+    seed: int = 0,
+) -> dict[str, Any]:
+    """sigma_epi(Cd) = std over members of each member's integrated Cd (ddof as given),
+    raw and with one temperature fitted on `val` (T^2 = mean(err^2 / sigma^2)), scored on
+    `test`. The error is the ensemble-mean Cd minus the HRLES Cd."""
+
+    def arrays(t: dict[str, dict[str, Any]]) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        m = np.array([v["cd_members"] for v in t.values()], dtype=np.float64)
+        truth = np.array([v["cd_true"] for v in t.values()], dtype=np.float64)
+        return m.std(axis=1, ddof=ddof), m.mean(axis=1) - truth
+
+    s_val, e_val = arrays(val)
+    s_test, e_test = arrays(test)
+    temp = float(np.sqrt(np.mean(e_val**2 / np.maximum(s_val, 1e-12) ** 2)))
+    return {
+        "ddof": ddof,
+        "members": len(next(iter(test.values()))["cd_members"]),
+        "temperature": temp,
+        "cd_mae_counts": float(np.abs(e_test).mean() * 1000),
+        "raw": sigma_row(s_test, e_test, n_boot, seed),
+        "calibrated": sigma_row(temp * s_test, e_test, n_boot, seed),
+        "val_calibrated": sigma_row(temp * s_val, e_val, n_boot, seed),
     }

@@ -216,8 +216,12 @@ def _validate_one(args: tuple[str, str, str, str]) -> dict[str, object]:
     from aerosurr.data.validate import validate_run
 
     raw, run, fields_json, fs_json = args
-    res = validate_run(Path(raw), run, SurfaceFields.model_validate_json(fields_json),
-                       Freestream.model_validate_json(fs_json))  # fmt: skip
+    res = validate_run(
+        Path(raw),
+        run,
+        SurfaceFields.model_validate_json(fields_json),
+        Freestream.model_validate_json(fs_json),
+    )
     return asdict(res)
 
 
@@ -246,16 +250,21 @@ def data_validate(
     run_list = runs.split(",") if runs else all_runs(load_manifest(raw / "splits/manifest.json"))
     if cpus:
         os.sched_setaffinity(0, parse_cpus(cpus))
-    args = [(str(raw), r, data.fields.model_dump_json(), data.freestream.model_dump_json())
-            for r in run_list]  # fmt: skip
+    args = [
+        (str(raw), r, data.fields.model_dump_json(), data.freestream.model_dump_json())
+        for r in run_list
+    ]
     results: list[RunValidation] = []
     with ProcessPoolExecutor(max_workers=workers) as pool:
         for i, d in enumerate(pool.map(_validate_one, args), 1):
             rv = RunValidation(**d)  # type: ignore[arg-type]
             results.append(rv)
             if i % 25 == 0 or i == len(args):
-                typer.echo(f"[{i}/{len(args)}] validated; failures so far: "
-                           f"{sum(not r.passed for r in results)}", err=True)  # fmt: skip
+                typer.echo(
+                    f"[{i}/{len(args)}] validated; failures so far: "
+                    f"{sum(not r.passed for r in results)}",
+                    err=True,
+                )
     text = render_markdown(results)
     typer.echo(text)
     if out:
@@ -276,8 +285,16 @@ def _store_one(args: tuple[str, str, str, str, str, int, bool, int]) -> dict[str
     from aerosurr.data.store import build_entry
 
     raw, store, run, fields_json, fs_json, pool, full, seed = args
-    e = build_entry(Path(raw), Path(store), run, SurfaceFields.model_validate_json(fields_json),
-                    Freestream.model_validate_json(fs_json), pool, full, seed)  # fmt: skip
+    e = build_entry(
+        Path(raw),
+        Path(store),
+        run,
+        SurfaceFields.model_validate_json(fields_json),
+        Freestream.model_validate_json(fs_json),
+        pool,
+        full,
+        seed,
+    )
     return asdict(e)
 
 
@@ -313,10 +330,20 @@ def data_build_store(
     import logging
 
     log = logging.getLogger("aerosurr.store")
-    log.info("store %s: %d runs, %d to build, %d workers; log %s", store, len(run_list),
-             len(todo), workers, log_file)  # fmt: skip
-    meta = {"pool_size": sc.pool_size, "seed": sc.seed, "full_splits": sc.full_splits,
-            "revision": data.source.revision}  # fmt: skip
+    log.info(
+        "store %s: %d runs, %d to build, %d workers; log %s",
+        store,
+        len(run_list),
+        len(todo),
+        workers,
+        log_file,
+    )
+    meta = {
+        "pool_size": sc.pool_size,
+        "seed": sc.seed,
+        "full_splits": sc.full_splits,
+        "revision": data.source.revision,
+    }
     fj, fsj = data.fields.model_dump_json(), data.freestream.model_dump_json()
     args = [(str(raw), str(store), r, fj, fsj, sc.pool_size, r in full, sc.seed) for r in todo]
     with ProcessPoolExecutor(max_workers=workers) as pool:
@@ -325,13 +352,27 @@ def data_build_store(
             e = StoreEntry(**fut.result())  # type: ignore[arg-type]
             entries[e.run] = e
             save_index(store, entries, meta)
-            log.info("[%d/%d] %s %s cells, %s, %.1f s, gate %s", i, len(todo), e.run,
-                     f"{e.n_cells:,}", "full+pool" if e.full else "pool", e.seconds,
-                     "ok" if e.passed else "FAIL")  # fmt: skip
+            log.info(
+                "[%d/%d] %s %s cells, %s, %.1f s, gate %s",
+                i,
+                len(todo),
+                e.run,
+                f"{e.n_cells:,}",
+                "full+pool" if e.full else "pool",
+                e.seconds,
+                "ok" if e.passed else "FAIL",
+            )
     keys = ("cd", "cl", "clf", "clr", "cs")
-    results = [RunValidation(run=e.run, n_cells=e.n_cells,
-                             ours={w: {k: e.coeffs[w][k] for k in keys} for w in e.coeffs},
-                             ref=e.ref) for e in entries.values() if e.run in run_list]  # fmt: skip
+    results = [
+        RunValidation(
+            run=e.run,
+            n_cells=e.n_cells,
+            ours={w: {k: e.coeffs[w][k] for k in keys} for w in e.coeffs},
+            ref=e.ref,
+        )
+        for e in entries.values()
+        if e.run in run_list
+    ]
     text = render_markdown(results)
     typer.echo(text)
     if report:
@@ -479,11 +520,17 @@ def rans_setup(
         raise typer.Exit(2)
     ref = read_geo_refs(src / f"geo_ref_{n}.csv").varying
     grid = write_case(case, cfg, preset, src / f"drivaer_{n}.stl", data.freestream, ref, ranks)
-    meta = {"run": run, "preset": preset, "config": config, "ranks": ranks,
-            "iterations": cfg.solver.iterations, "average_last": cfg.solver.average_last,
-            "potential_init": cfg.solver.potential_init,
-            "keep_volume": cfg.output.keep_volume,
-            "background_cells": grid.n_cells}  # fmt: skip
+    meta = {
+        "run": run,
+        "preset": preset,
+        "config": config,
+        "ranks": ranks,
+        "iterations": cfg.solver.iterations,
+        "average_last": cfg.solver.average_last,
+        "potential_init": cfg.solver.potential_init,
+        "keep_volume": cfg.output.keep_volume,
+        "background_cells": grid.n_cells,
+    }
     (case / CASE_META).write_text(json.dumps(meta, indent=2))
     typer.echo(f"{case}  ({grid.n_cells:,} background cells of {grid.h} m)")
 
@@ -509,9 +556,15 @@ def rans_run(
     from aerosurr.data.splits import run_number
 
     fm = paths.data_raw / meta["run"] / f"force_mom_{run_number(meta['run'])}.csv"
-    res = run_case(case.resolve(), cpu_list, meta["preset"], meta["potential_init"],
-                   meta["average_last"], read_force_mom(fm) if fm.is_file() else None,
-                   keep_volume=meta.get("keep_volume", False))  # fmt: skip
+    res = run_case(
+        case.resolve(),
+        cpu_list,
+        meta["preset"],
+        meta["potential_init"],
+        meta["average_last"],
+        read_force_mom(fm) if fm.is_file() else None,
+        keep_volume=meta.get("keep_volume", False),
+    )
     raise typer.Exit(0 if res.status == "done" else 1)
 
 
@@ -551,11 +604,20 @@ def rans_batch(
     setup_logging(paths.logs / "aero-rans", "batch")
     log = logging.getLogger("aerosurr.rans")
     env = openfoam_env()
-    todo = [r for r in run_list if not any(is_done(case_dir(root, r, preset, len(s.cpus)))
-                                           for s in slot_list)]  # fmt: skip
-    log.info("batch: %d runs, %d done, %d to go; preset %s, %d iterations; slots %s",
-             len(run_list), len(run_list) - len(todo), len(todo), preset, cfg.solver.iterations,
-             {s.name: f"{len(s.cpus)} ranks" for s in slot_list})  # fmt: skip
+    todo = [
+        r
+        for r in run_list
+        if not any(is_done(case_dir(root, r, preset, len(s.cpus))) for s in slot_list)
+    ]
+    log.info(
+        "batch: %d runs, %d done, %d to go; preset %s, %d iterations; slots %s",
+        len(run_list),
+        len(run_list) - len(todo),
+        len(todo),
+        preset,
+        cfg.solver.iterations,
+        {s.name: f"{len(s.cpus)} ranks" for s in slot_list},
+    )
 
     def work(run: str, slot: Slot) -> bool:
         n = run_number(run)
@@ -566,12 +628,20 @@ def rans_batch(
 
             shutil.rmtree(case)  # a half-finished case: start it again cleanly
         ref = read_geo_refs(src / f"geo_ref_{n}.csv").varying
-        write_case(case, cfg, preset, src / f"drivaer_{n}.stl", data.freestream, ref,
-                   len(slot.cpus))  # fmt: skip
+        write_case(
+            case, cfg, preset, src / f"drivaer_{n}.stl", data.freestream, ref, len(slot.cpus)
+        )
         fm = src / f"force_mom_{n}.csv"
-        res = run_case(case, slot.cpus, preset, cfg.solver.potential_init,
-                       cfg.solver.average_last, read_force_mom(fm), env,
-                       keep_volume=cfg.output.keep_volume)  # fmt: skip
+        res = run_case(
+            case,
+            slot.cpus,
+            preset,
+            cfg.solver.potential_init,
+            cfg.solver.average_last,
+            read_force_mom(fm),
+            env,
+            keep_volume=cfg.output.keep_volume,
+        )
         return res.status == "done"
 
     results = run_queue(todo, slot_list, work)
@@ -645,8 +715,10 @@ def rans_summary(
     """Markdown table of timings, cell counts and Cd/Cl against the HF reference."""
     from aerosurr.rans.run import RESULT_NAME
 
-    typer.echo("| Case | Ranks | CPUs | Status | Cells | Mesh (min) | Solve (min) | s/iter | "
-               "Total (min) | Cd | Cd HF | ΔCd (counts) | Cl | Cl HF |")  # fmt: skip
+    typer.echo(
+        "| Case | Ranks | CPUs | Status | Cells | Mesh (min) | Solve (min) | s/iter | "
+        "Total (min) | Cd | Cd HF | ΔCd (counts) | Cl | Cl HF |"
+    )
     typer.echo("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for c in cases:
         r = json.loads((c / RESULT_NAME).read_text())
@@ -677,8 +749,9 @@ def _cuda_device(gpu: int) -> torch.device:
     import torch
 
     if "CUDA_VISIBLE_DEVICES" not in os.environ:
-        typer.echo("set CUDA_VISIBLE_DEVICES explicitly (SPEC §2: GPU 0 main, GPU 1 ensembles)",
-                   err=True)  # fmt: skip
+        typer.echo(
+            "set CUDA_VISIBLE_DEVICES explicitly (SPEC §2: GPU 0 main, GPU 1 ensembles)", err=True
+        )
         raise typer.Exit(2)
     if not torch.cuda.is_available():
         typer.echo("CUDA not available", err=True)
@@ -746,8 +819,11 @@ def eval_lf(
 
     paths, data = state.paths(), state.data()
     store = paths.data_store / data.store.version
-    runs = [r for r in load_manifest(paths.data_raw / "splits/manifest.json")[split]
-            if (store / LF_DIR / f"{r}.npz").is_file()]  # fmt: skip
+    runs = [
+        r
+        for r in load_manifest(paths.data_raw / "splits/manifest.json")[split]
+        if (store / LF_DIR / f"{r}.npz").is_file()
+    ]
     import numpy as np
 
     rows = {}
@@ -769,8 +845,13 @@ def eval_lf(
         raise typer.Exit(1)
     dcd = np.array([v["pred"]["cd"] - v["true"]["cd"] for v in rows.values()])
     rel = {f: float(np.mean([v["rel_l2"][f] for v in rows.values()])) for f in FIELD_NAMES}
-    out = {"split": split, "runs": len(rows), "rel_l2": rel,
-           "cd_mae_counts": float(np.abs(dcd).mean() * 1000), "per_run": rows}  # fmt: skip
+    out = {
+        "split": split,
+        "runs": len(rows),
+        "rel_l2": rel,
+        "cd_mae_counts": float(np.abs(dcd).mean() * 1000),
+        "per_run": rows,
+    }
     (store / LF_DIR / f"eval_{split}.json").write_text(json.dumps(out, indent=1))
     typer.echo(json.dumps({k: v for k, v in out.items() if k != "per_run"}, indent=2))
 
@@ -828,6 +909,66 @@ def eval_ensemble(
     typer.echo(json.dumps({k: v for k, v in res.items() if k != "per_run"}, indent=2))
 
 
+@eval_app.command("ensemble-cd")
+def eval_ensemble_cd(
+    run_dirs: Annotated[list[Path], typer.Argument(help="Member run directories.")],
+    name: Annotated[str, typer.Option(help="Ensemble name (dir under paths.runs).")],
+    gpu: Annotated[int, typer.Option(help="Index among CUDA_VISIBLE_DEVICES.")] = 0,
+    ddof: Annotated[int, typer.Option(help="ddof of the std across members.")] = 0,
+    recompute: Annotated[bool, typer.Option("--recompute", help="Ignore member_cd.json.")] = False,
+) -> None:
+    """Per-car Cd check: sigma from member spread only, raw and val-calibrated, with a
+    bootstrap CI on Spearman(sigma, |err|); compared like for like with the current sigma."""
+    import numpy as np
+    import torch
+
+    from aerosurr.config import ModelConfig, TrainConfig
+    from aerosurr.data.splits import load_manifest
+    from aerosurr.eval.ensemble import member_forces, per_car_cd_check, sigma_row
+    from aerosurr.models.surface import build_model
+    from aerosurr.train.data import Normaliser
+
+    paths, data = state.paths(), state.data()
+    configure_runtime(paths.workspace)
+    out = paths.runs / name
+    table_path = out / "member_cd.json"
+    manifest = load_manifest(paths.data_raw / "splits/manifest.json")
+    if table_path.is_file() and not recompute:
+        table = json.loads(table_path.read_text())
+    else:
+        device = _cuda_device(gpu)
+        members, stats, tc = [], None, None
+        for d in run_dirs:
+            cfg = json.loads((d / "config.json").read_text())
+            mc = ModelConfig.model_validate(cfg["model"])
+            tc = TrainConfig.model_validate(cfg["train"])
+            m = build_model(mc).to(device)
+            m.load_state_dict(torch.load(d / "best.pt", map_location=device))
+            m.eval()
+            members.append((torch.compile(m) if tc.compile else m, mc))
+            stats = stats or cfg["stats"]
+        assert tc is not None and stats is not None
+        norm, store = Normaliser.from_stats(stats), paths.data_store / data.store.version
+        table = {
+            split: member_forces(
+                members, norm, store, paths.data_raw, manifest[split], tc.points, tc.bf16, device
+            )
+            for split in ("full_val", "full_test")
+        }
+        table["member_dirs"] = [str(d) for d in run_dirs]
+        out.mkdir(parents=True, exist_ok=True)
+        table_path.write_text(json.dumps(table, indent=1))
+    res = per_car_cd_check(table["full_val"], table["full_test"], ddof=ddof)
+    current = out / "ensemble_full_test.json"
+    if current.is_file():
+        pr = json.loads(current.read_text())["per_run"]
+        sig = np.array([v["cd_std_cal"] for v in pr.values()])
+        err = np.array([v["cd_mean"] - v["cd_true"] for v in pr.values()])
+        res["current"] = sigma_row(sig, err)
+    (out / "per_car_sigma.json").write_text(json.dumps(res, indent=1))
+    typer.echo(json.dumps(res, indent=1))
+
+
 @eval_app.command("run")
 def eval_run(
     run_dir: Annotated[Path, typer.Argument(help="A training run directory.")],
@@ -860,9 +1001,19 @@ def eval_run(
         wanted = set(runs.split(","))
         run_list = [r for r in run_list if r in wanted]
     store = paths.data_store / data.store.version
-    res = evaluate_full(fwd, Normaliser.from_stats(cfg["stats"]), store, paths.data_raw, run_list,
-                        tc.points, device, tc.bf16, mc.lf_inputs, mc.predict_residual,
-                        mc.heteroscedastic)  # fmt: skip
+    res = evaluate_full(
+        fwd,
+        Normaliser.from_stats(cfg["stats"]),
+        store,
+        paths.data_raw,
+        run_list,
+        tc.points,
+        device,
+        tc.bf16,
+        mc.lf_inputs,
+        mc.predict_residual,
+        mc.heteroscedastic,
+    )
     (run_dir / f"{tag or split}.json").write_text(json.dumps(res, indent=1))
     typer.echo(json.dumps({k: v for k, v in res.items() if k != "per_run"}, indent=2))
 
@@ -1019,8 +1170,12 @@ def viewer_export(
         }
         cd_sigma = None
         if ens:
-            preds = [predict_tensor(m, norm, g["centres"], g["normals"], t.points, t.bf16,
-                                    c.heteroscedastic) for m, c, t, _ in ens]  # fmt: skip
+            preds = [
+                predict_tensor(
+                    m, norm, g["centres"], g["normals"], t.points, t.bf16, c.heteroscedastic
+                )
+                for m, c, t, _ in ens
+            ]
             comb = combine([p[0] for p in preds], [p[1] for p in preds])
             fields["cp_sigma"] = (t_cp * comb.var[:, 0].sqrt()).float().cpu().numpy()
             cds = [
@@ -1030,15 +1185,23 @@ def viewer_export(
         surf = read_vtp(paths.data_raw / r / f"boundary_{n}.vtp")
         verts, tris = decimate(surf.points, surf.offsets, surf.connectivity, cell)
         vals = nearest_cell_values(g["centres"].cpu().numpy(), fields, verts)
-        meta = {"run": r, "cd_true": index[r].coeffs["varying"]["cd"], "cd_pred": fp.cd,
-                "cl_true": index[r].coeffs["varying"]["cl"], "cl_pred": fp.cl,
-                "cd_sigma": cd_sigma, "model": model_dir.name,
-                "sigma_from": [d.name for d in members or []],
-                "calibrated": calibration is not None}  # fmt: skip
+        meta = {
+            "run": r,
+            "cd_true": index[r].coeffs["varying"]["cd"],
+            "cd_pred": fp.cd,
+            "cl_true": index[r].coeffs["varying"]["cl"],
+            "cl_pred": fp.cl,
+            "cd_sigma": cd_sigma,
+            "model": model_dir.name,
+            "sigma_from": [d.name for d in members or []],
+            "calibrated": calibration is not None,
+        }
         h = write_bin(out / f"{r}.bin", verts, tris, vals, meta, VIEWER_RANGES)
         cars.append({k: v for k, v in h.items() if k != "header_bytes"} | {"file": f"{r}.b64.txt"})
-        typer.echo(f"{r}: {h['n_vertices']:,} vertices, {h['n_triangles']:,} triangles, "
-                   f"Cd {meta['cd_true']:.4f} -> {fp.cd:.4f}")  # fmt: skip
+        typer.echo(
+            f"{r}: {h['n_vertices']:,} vertices, {h['n_triangles']:,} triangles, "
+            f"Cd {meta['cd_true']:.4f} -> {fp.cd:.4f}"
+        )
         del g, mu
     (out / "index.json").write_text(json.dumps({"cars": cars, "ranges": VIEWER_RANGES}, indent=1))
     typer.echo(f"{len(cars)} cars -> {out}")

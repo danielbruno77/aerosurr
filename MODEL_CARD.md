@@ -81,9 +81,15 @@ See [docs/results.md](docs/results.md):
 - **Uncertainty is calibrated** on `full_val` (34 cars) in-distribution only.
   Out-of-distribution σ is not validated.
 - **Per-cell σ ranks errors well; per-car σ(Cd) does not.** Per-cell coverage is close
-  to nominal, and σ correlates with the error at Spearman 0.60–0.75. Per-car σ(Cd) has
-  the right average size, but on 50 test cars its rank correlation with the Cd error is
-  indistinguishable from zero. Use it as an error scale, not to flag individual cars.
+  to nominal, and σ correlates with the error at Spearman 0.60–0.75. Per-car σ(Cd) is
+  the spread of the members' integrated Cd: epistemic only, since the per-cell
+  aleatoric variance (91 % of the field variance) does not enter it. Raw, it is about
+  2.5× too small (ensemble_v2: mean 1.3 counts, 90 % coverage 0.64 on 50 test cars).
+  After one temperature fitted on `full_val` (2.53) it has the right average size
+  (3.3 counts, coverage 0.64 / 0.88 / 0.92 at 50 / 90 / 95 %). Its rank correlation
+  with the Cd error is still −0.11 (95 % bootstrap CI −0.42 to +0.20; ensemble_v1
+  +0.19, CI −0.09 to +0.45), which is indistinguishable from zero. Use it as an error
+  scale, not to flag individual cars.
 
 ## Compute and energy
 
