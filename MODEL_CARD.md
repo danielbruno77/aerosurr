@@ -78,12 +78,16 @@ See [docs/results.md](docs/results.md):
 - **The LF model is coarse:** wall functions on 1–2 cm cells give poor skin friction (LF
   Cf relative L2 ≈ 0.7–0.9). The MF model therefore leans on LF pressure more than on
   LF shear.
-- **The MF variant does not beat HF-only.** On 50 LF-mapped test cars its field errors
-  are higher at 11, 25 and 50 training cars (Cp relative L2 0.174 / 0.137 / 0.114 against
-  0.167 / 0.117 / 0.097). Its Cd is better only at 11 cars (8.5 against 15.1 counts), and
-  without better fields behind it. Each model is a single seed. The cheapest use of
-  the RANS is a scalar correction, Cd_HF = a + b·Cd_LF (10.9 / 8.3 / 8.3 counts); RANS
-  alone gives 8.8. With 50 HF cars, HF-only is best (6.2 counts).
+- **The MF variant does not beat HF-only on fields.** These are 3 seeds per model on
+  the same nested training cars (variation across training subsets is not covered),
+  scored on 50 LF-mapped test cars. MF's Cf error is higher than HF-only's in every seed
+  at 11, 25 and 50 cars, and so is its Cp error at 25 and 50 cars. At 11 cars, Cp is
+  within seed spread (0.171 against 0.171). Its one clear win is Cd at 11 cars: 8.9 ±
+  0.4 against 15.9 ± 1.4 counts, MF better in all 3 seeds. At 25 and 50 cars the Cd
+  differences are within seed spread (11.0 ± 1.8 against 10.6 ± 0.9; 7.6 ± 1.4 against
+  6.2 ± 0.9). So the earlier single-seed dip at 25 cars (12.9 counts) was seed noise.
+  RANS alone gives 8.8 counts and a scalar correction Cd_HF = a + b·Cd_LF gives 10.9 /
+  8.3 / 8.3.
 - **Surface subtleties:** the native surface is open at the tyre contact patches. A
   constant pressure offset would shift Cl slightly; p∞ = 0 by construction.
 - **Uncertainty is calibrated in distribution** (`full_val`, 34 cars). Out of

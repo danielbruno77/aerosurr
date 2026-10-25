@@ -19,10 +19,12 @@ claude.ai artifact.
 
 **Status: Day 1 done.** Every one of the 484 runs passes the physics gate (integrated
 forces match DrivAerML's reference CSVs to ≤ 8e-7). The 100-case coarse RANS batch, the
-deep ensemble and the MF study are done. Feeding RANS fields into the network did not
-pay off: the MF model's field errors are higher than an HF-only model's at 11, 25 and
-50 training cars, and its drag is better only at 11 cars. A scalar Cd correction of the
-RANS beats HF-only up to 25 cars. On the official `geometry` out-of-distribution split,
+deep ensemble and the MF study (3 seeds per model) are done. Feeding RANS fields into
+the network did not pay off for fields: the MF model's shear errors are higher than an
+HF-only model's in every seed at 11, 25 and 50 training cars, and so are its pressure
+errors from 25 cars. Its one clear win is drag with 11 training cars (8.9 ± 0.4 against
+15.9 ± 1.4 counts). From 25 cars the drag difference is within seed spread. A scalar
+Cd correction of the RANS (8.3 counts) is competitive up to 25 cars. On the official `geometry` out-of-distribution split,
 a separately trained ensemble's σ rises in step with its error and flags the unfamiliar
 cars (AUROC 0.82 for per-car mean σ(Cp)). That shift is mild, though: Cd error goes
 from 2.0 to 2.6 counts.

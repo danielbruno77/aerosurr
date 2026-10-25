@@ -38,24 +38,34 @@ training longer.
 
 - LF alone (coarse RANS mapped onto the HF mesh, 50 test cars): Cp rel L2 0.303, Cd MAE 8.8 counts.
 
-Cd MAE (counts) on the 50 LF-mapped `full_test` cars, by number of training cars (each model is one seed):
+Every model is evaluated on the same 50 LF-mapped `full_test` cars. Values are mean ± std (ddof 1) [min, max] over 3 seed(s); a seed sets the initialisation and the data order. Every seed uses the same nested training cars, so the variation across training subsets is not covered. MF − HF-only is paired by seed (seeds 0 / 1 / 2; negative = MF better). The verdict names a winner only when the two models' seed ranges do not overlap and the paired difference has the same sign in every seed; otherwise the difference is *within seed spread*. LF alone and the scalar correction are deterministic for a given set of training cars, so they are single values.
 
-| Training runs | HF only | MF (LF inputs, residual) | Scalar Cd_HF = a + b·Cd_LF |
-|---|---|---|---|
-| 11 | 15.1 | 8.5 | 10.9 |
-| 25 | 9.5 | 12.9 | 8.3 |
-| 50 | 6.2 | 9.2 | 8.3 |
+**Result:** Cd MAE: MF better at 11 cars, within seed spread at 25 and 50 cars; Cp: within seed spread at 11 cars, HF-only better at 25 and 50 cars; Cf_x: HF-only better at 11, 25 and 50 cars; Cf_y: HF-only better at 11, 25 and 50 cars; Cf_z: HF-only better at 11, 25 and 50 cars.
 
-Field errors (area-weighted relative L2, same cars):
+Cd MAE (counts):
 
-| Training runs | Model | Cp | Cf_x | Cf_y | Cf_z |
-|---|---|---|---|---|---|
-| 11 | HF only | 0.167 | 0.177 | 0.329 | 0.292 |
-| 11 | MF | 0.174 | 0.209 | 0.413 | 0.343 |
-| 25 | HF only | 0.117 | 0.129 | 0.253 | 0.216 |
-| 25 | MF | 0.137 | 0.166 | 0.334 | 0.280 |
-| 50 | HF only | 0.097 | 0.113 | 0.223 | 0.186 |
-| 50 | MF | 0.114 | 0.137 | 0.275 | 0.228 |
+| Training cars | HF only | MF (LF inputs, residual) | MF − HF-only per seed | Mean difference | Verdict | Scalar Cd_HF = a + b·Cd_LF |
+|---|---|---|---|---|---|---|
+| 11 | 15.9 ± 1.4 [15.0, 17.4] | 8.9 ± 0.4 [8.5, 9.1] | -6.7 / -6.0 / -8.3 | -7.0 | MF better | 10.9 |
+| 25 | 10.6 ± 0.9 [9.5, 11.1] | 11.0 ± 1.8 [9.4, 12.9] | +3.4 / -1.8 / -0.2 | +0.5 | within seed spread | 8.3 |
+| 50 | 6.2 ± 0.9 [5.3, 7.1] | 7.6 ± 1.4 [6.5, 9.2] | +3.0 / +1.2 / +0.1 | +1.4 | within seed spread | 8.3 |
+
+Field errors (area-weighted relative L2):
+
+| Training cars | Field | HF only | MF | MF − HF-only per seed | Mean difference | Verdict |
+|---|---|---|---|---|---|---|
+| 11 | cp | 0.171 ± 0.006 [0.167, 0.178] | 0.171 ± 0.003 [0.167, 0.174] | +0.006 / -0.002 / -0.007 | -0.001 | within seed spread |
+| 11 | cf_x | 0.175 ± 0.005 [0.170, 0.179] | 0.205 ± 0.004 [0.201, 0.209] | +0.032 / +0.031 / +0.026 | +0.030 | HF-only better |
+| 11 | cf_y | 0.329 ± 0.001 [0.328, 0.330] | 0.408 ± 0.005 [0.402, 0.413] | +0.084 / +0.073 / +0.081 | +0.079 | HF-only better |
+| 11 | cf_z | 0.295 ± 0.004 [0.292, 0.300] | 0.340 ± 0.004 [0.336, 0.343] | +0.051 / +0.042 / +0.042 | +0.045 | HF-only better |
+| 25 | cp | 0.117 ± 0.004 [0.113, 0.122] | 0.136 ± 0.001 [0.135, 0.137] | +0.020 / +0.022 / +0.013 | +0.018 | HF-only better |
+| 25 | cf_x | 0.130 ± 0.005 [0.126, 0.135] | 0.163 ± 0.003 [0.161, 0.166] | +0.037 / +0.036 / +0.026 | +0.033 | HF-only better |
+| 25 | cf_y | 0.255 ± 0.008 [0.249, 0.264] | 0.329 ± 0.004 [0.327, 0.334] | +0.081 / +0.078 / +0.064 | +0.074 | HF-only better |
+| 25 | cf_z | 0.216 ± 0.007 [0.210, 0.223] | 0.275 ± 0.004 [0.273, 0.280] | +0.064 / +0.064 / +0.049 | +0.059 | HF-only better |
+| 50 | cp | 0.097 ± 0.001 [0.096, 0.098] | 0.111 ± 0.002 [0.110, 0.114] | +0.016 / +0.015 / +0.012 | +0.014 | HF-only better |
+| 50 | cf_x | 0.113 ± 0.001 [0.111, 0.114] | 0.134 ± 0.002 [0.132, 0.137] | +0.023 / +0.021 / +0.019 | +0.021 | HF-only better |
+| 50 | cf_y | 0.223 ± 0.003 [0.220, 0.226] | 0.268 ± 0.005 [0.265, 0.275] | +0.052 / +0.046 / +0.039 | +0.045 | HF-only better |
+| 50 | cf_z | 0.185 ± 0.002 [0.182, 0.186] | 0.223 ± 0.005 [0.220, 0.228] | +0.042 / +0.038 / +0.034 | +0.038 | HF-only better |
 
 ![Multi-fidelity](figures/mf_cd.png)
 
