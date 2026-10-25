@@ -279,7 +279,12 @@ OOD_ENSEMBLE = "ensemble_ood_v1"
 
 
 def _ci_verdict(lo: float, hi: float, pos: str, neg: str, none: str) -> str:
-    return pos if lo > 0 else neg if hi < 0 else none
+    """Sign of a correlation from its CI; a bound within 0.05 of zero reads as weak."""
+    if lo > 0:
+        return pos if lo >= 0.05 else f"weakly {pos} (CI lower bound ≈ 0)"
+    if hi < 0:
+        return neg if hi <= -0.05 else f"weakly {neg} (CI upper bound ≈ 0)"
+    return none
 
 
 def _ratio_verdict(rs: float, re_: float) -> str:
@@ -290,6 +295,48 @@ def _ratio_verdict(rs: float, re_: float) -> str:
     if rs / re_ > 1.25:
         return "σ rises more than the error (OOD intervals conservative)"
     return "σ rises in step with the error"
+
+
+def _ood_answer(o: dict[str, Any]) -> str:
+    """The headline, in words, from the numbers."""
+    i, d, r = o["id"], o["ood"], o["ratio_ood_over_id"]
+    au, nov = o["auroc_ood_vs_id"], o["novelty"]
+    pairs = [(r["sigma_cell"]["cp"], r["abs_err_cell"]["cp"]), (r["cd_sigma"], r["cd_mae"])]
+    if all(rs < 1.05 for rs, _ in pairs):
+        head = "no, σ does not rise out of distribution"
+    elif all(rs >= 1.05 and 0.8 <= rs / re_ <= 1.25 for rs, re_ in pairs):
+        head = "yes, σ rises out of distribution in step with the error"
+    elif all(rs / re_ < 0.8 for rs, re_ in pairs):
+        head = "partly, σ rises but less than the error"
+    else:
+        head = "mixed, σ rises but not in step with the error everywhere"
+    shift = max(re_ for _, re_ in pairs)
+    size = "a mild shift" if shift < 1.5 else "a substantial shift"
+    cov = [o["per_cell_ood"]["coverage"]["0.9"][f] for f in ("cp", "cf_x", "cf_y", "cf_z")]
+
+    def ci(x: dict[str, Any], key: str = "auroc") -> str:
+        lo, hi = x["ci95"]
+        return f"{x[key]:.2f} [{lo:.2f}, {hi:.2f}]"
+
+    sp_ood = d["cd"]
+    lo, hi = sp_ood["spearman_ci95"]
+    return (
+        f"**Result: {head}, on {size}.** On the {d['n']} most isolated geometries the errors "
+        f"grow by ×{r['abs_err_cell']['cp']:.2f} per cell (Cp) and ×{r['cd_mae']:.2f} in Cd "
+        f"({i['cd_mae_counts']:.1f} → {d['cd_mae_counts']:.1f} counts); calibrated σ grows "
+        f"by ×{r['sigma_cell']['cp']:.2f} and ×{r['cd_sigma']:.2f}, and per-cell 90 % "
+        f"coverage on the OOD side is {min(cov):.2f}–{max(cov):.2f}. Per car, mean σ(Cp) "
+        f"tells OOD from ID cars with AUROC {ci(au['cp_sigma_cell'])} and σ(Cd) with "
+        f"{ci(au['cd_sigma'])}, while the Cd error itself only reaches "
+        f"{ci(au['cd_abs_err'])}. σ follows geometric novelty (Spearman with `ood_score`: "
+        f"{ci(nov['cp_sigma_vs_novelty_all'], 'spearman')} for σ(Cp), "
+        f"{ci(nov['cd_sigma_vs_novelty_all'], 'spearman')} for σ(Cd), ID + OOD) more than the "
+        f"Cd error does ({ci(nov['cd_abs_err_vs_novelty_all'], 'spearman')}). So σ works as "
+        "a novelty flag; it still does not rank individual cars' Cd errors (Spearman "
+        f"{sp_ood['spearman']:+.2f} [{lo:+.2f}, {hi:+.2f}] on the OOD cars). The shift stays "
+        "inside the DrivAer notchback morph family; it does not validate σ for other "
+        "vehicle types.\n"
+    )
 
 
 def _ood_section(o: dict[str, Any], w: Callable[[str], None]) -> None:
@@ -310,6 +357,7 @@ def _ood_section(o: dict[str, Any], w: Callable[[str], None]) -> None:
         "side is calibrated by construction and the OOD side shows what survives the shift. "
         "σ below is calibrated; per-cell means are cell means per car, averaged over cars.\n"
     )
+    w(_ood_answer(o) + "\n")
     w("### Does σ rise out of distribution?\n")
     w(
         "| Quantity | ID (val) | OOD (test) | OOD / ID "
@@ -336,7 +384,7 @@ def _ood_section(o: dict[str, Any], w: Callable[[str], None]) -> None:
     labels = {
         "cd_sigma": "σ(Cd) per car",
         "cp_sigma_cell": "mean per-cell σ(Cp) per car",
-        "cd_abs_err": "|Cd error| per car (reference: how separable the errors are)",
+        "cd_abs_err": "\\|Cd error\\| per car (reference: how separable the errors are)",
     }
     for k, lab in labels.items():
         a = o["auroc_ood_vs_id"][k]
@@ -356,8 +404,8 @@ def _ood_section(o: dict[str, Any], w: Callable[[str], None]) -> None:
         "cd_sigma_vs_novelty_ood": "σ(Cd), OOD test cars",
         "cd_sigma_vs_novelty_all": "σ(Cd), ID + OOD",
         "cp_sigma_vs_novelty_all": "mean per-cell σ(Cp), ID + OOD",
-        "cd_abs_err_vs_novelty_ood": "|Cd error|, OOD test cars (reference)",
-        "cd_abs_err_vs_novelty_all": "|Cd error|, ID + OOD (reference)",
+        "cd_abs_err_vs_novelty_ood": "\\|Cd error\\|, OOD test cars (reference)",
+        "cd_abs_err_vs_novelty_all": "\\|Cd error\\|, ID + OOD (reference)",
     }
     for k, lab in nl.items():
         x = o["novelty"][k]

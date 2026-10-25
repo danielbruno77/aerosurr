@@ -13,7 +13,7 @@ evaluation files, so this card never carries numbers by hand.
 | Inputs per cell | cell centre (normalised isotropically into ~[-1, 1]), outward unit normal |
 | Outputs per cell | Cp, Cf_x, Cf_y, Cf_z, each standardised with `full_train` statistics |
 | Multi-fidelity variant | `Transolver` plus the coarse-RANS Cp and Cf mapped onto each cell (7 input features); it learns the HF − LF residual. It is compared with an HF-only `Transolver` trained on the same cars, and both keep their final weights because the val cars have no RANS |
-| Uncertainty | **ensemble_v2**, the reported ensemble: 5 heteroscedastic `GeoTransolver` members (mean + log-variance, Gaussian NLL) at the main-model budget, with seeds 100–104 that also change the data order. Temperatures are fitted on `full_val`, one per field and one for Cd. Its mean is also the most accurate Cd predictor here. **ensemble_v1** (5 `Transolver` members at 20k steps) is kept as a baseline |
+| Uncertainty | **ensemble_v2**, the reported ensemble: 5 heteroscedastic `GeoTransolver` members (mean + log-variance, Gaussian NLL) at the main-model budget, with seeds 100–104 that also change the data order. Temperatures are fitted on `full_val`, one per field and one for Cd. Its mean is also the most accurate Cd predictor here. **ensemble_v1** (5 `Transolver` members at 20k steps) is kept as a baseline. **ensemble_ood_v1** is ensemble_v2's recipe trained on the `geometry` OOD split, for the out-of-distribution check only |
 | Baselines | In-house PointNet-style model (0.4 M parameters); LF RANS alone; scalar correction Cd_HF = a + b·Cd_LF |
 | Code | `src/aerosurr` (CLI: `aerosurr train run`, `eval run`, `eval ensemble`, `report`) |
 
@@ -69,8 +69,10 @@ See [docs/results.md](docs/results.md):
 ## Limitations
 
 - **One car family, one operating point:** DrivAer notchback morphs at 140 km/h, 0° yaw.
-  Extrapolation is not supported. An OOD check on the official `geometry` split
-  (`ensemble_ood_v1`) is running; its result will be added here.
+  Extrapolation beyond the morph family is not supported. Inside it, the official
+  `geometry` OOD split (the 97 most isolated surfaces) is only a mild shift: a separately
+  trained ensemble's errors rise by ×1.17 per cell (Cp) and ×1.28 in Cd (2.0 → 2.6
+  counts).
 - **Time-averaged only.** HRLES side force (Cs) comes largely from wake asymmetry, so it
   is noisy at the dataset's averaging window and hard to predict from geometry.
 - **The LF model is coarse:** wall functions on 1–2 cm cells give poor skin friction (LF
@@ -84,8 +86,13 @@ See [docs/results.md](docs/results.md):
   alone gives 8.8. With 50 HF cars, HF-only is best (6.2 counts).
 - **Surface subtleties:** the native surface is open at the tyre contact patches. A
   constant pressure offset would shift Cl slightly; p∞ = 0 by construction.
-- **Uncertainty is calibrated** on `full_val` (34 cars) in-distribution only.
-  Out-of-distribution σ is not validated.
+- **Uncertainty is calibrated in distribution** (`full_val`, 34 cars). Out of
+  distribution it was checked once: `ensemble_ood_v1` (ensemble_v2's recipe on the
+  `geometry` split, normalisation and temperatures from its training-side cars). On the
+  97 most isolated surfaces, σ rises in step with the error: per-cell σ(Cp) ×1.11
+  against error ×1.17, and σ(Cd) ×1.28 against Cd MAE ×1.28. Per-cell 90 % coverage
+  stays at 0.89–0.90. That shift is mild and stays inside the morph family; σ is not
+  validated for other vehicle types.
 - **Per-cell σ ranks errors well; per-car σ(Cd) does not.** Per-cell coverage is close
   to nominal, and σ correlates with the error at Spearman 0.60–0.75. Per-car σ(Cd) is
   the spread of the members' integrated Cd: epistemic only, since the per-cell
@@ -94,8 +101,13 @@ See [docs/results.md](docs/results.md):
   After one temperature fitted on `full_val` (2.53) it has the right average size
   (3.3 counts, coverage 0.64 / 0.88 / 0.92 at 50 / 90 / 95 %). Its rank correlation
   with the Cd error is still −0.11 (95 % bootstrap CI −0.42 to +0.20; ensemble_v1
-  +0.19, CI −0.09 to +0.45), which is indistinguishable from zero. Use it as an error
-  scale, not to flag individual cars.
+  +0.19, CI −0.09 to +0.45), which is indistinguishable from zero. Out of distribution
+  it still does not rank errors (+0.13, CI −0.08 to +0.33, 97 cars), but σ does flag
+  unfamiliar geometry. Against the 48 in-distribution cars, per-car σ(Cd) picks out the
+  97 OOD cars with AUROC 0.68 (CI 0.58–0.77), and the per-car mean of per-cell σ(Cp)
+  with 0.82 (0.75–0.89). Both follow the Chamfer novelty score (Spearman 0.34 and
+  0.61), while the Cd error itself does not (0.10, CI −0.07 to +0.26). Use σ as an
+  error scale and a novelty flag, not to pick out the worst cars.
 
 ## Compute and energy
 

@@ -22,8 +22,10 @@ forces match DrivAerML's reference CSVs to ≤ 8e-7). The 100-case coarse RANS b
 deep ensemble and the MF study are done. Feeding RANS fields into the network did not
 pay off: the MF model's field errors are higher than an HF-only model's at 11, 25 and
 50 training cars, and its drag is better only at 11 cars. A scalar Cd correction of the
-RANS beats HF-only up to 25 cars. An out-of-distribution check on the `geometry` split
-is running.
+RANS beats HF-only up to 25 cars. On the official `geometry` out-of-distribution split,
+a separately trained ensemble's σ rises in step with its error and flags the unfamiliar
+cars (AUROC 0.82 for per-car mean σ(Cp)). That shift is mild, though: Cd error goes
+from 2.0 to 2.6 counts.
 
 ## Quick start (workstation-III)
 

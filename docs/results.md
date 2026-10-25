@@ -96,3 +96,51 @@ Per-car σ(Cd) is calibrated in coverage, but its rank correlation with the Cd e
 | ensemble_v1 | current (reported above) | 2.24 | 6.6 | 0.48 | 0.94 | 0.98 | +0.19 [-0.09, +0.45] |
 | ensemble_v1 | epistemic, raw | 1 | 2.9 | 0.30 | 0.50 | 0.60 | +0.19 [-0.09, +0.45] |
 | ensemble_v1 | epistemic, calibrated | 2.24 | 6.6 | 0.48 | 0.94 | 0.98 | +0.19 [-0.09, +0.45] |
+
+## Out-of-distribution check: `geometry_test` (OOD, 97 cars) vs `geometry_val` (ID, 48 cars)
+
+`ensemble_ood_v1`: 5 heteroscedastic GeoTransolver members with ensemble_v2's config and budget, trained on the official `geometry` split (339 training cars; normalisation statistics from those cars only) and kept apart from every `full`-split result. Test cars are the 20 % most isolated STL surfaces (mean Chamfer RMS distance to the 10 nearest public geometries, the dataset's `ood_score`); val cars come from the training-side population. Temperatures are fitted on the val cars, so the ID side is calibrated by construction and the OOD side shows what survives the shift. σ below is calibrated; per-cell means are cell means per car, averaged over cars.
+
+**Result: yes, σ rises out of distribution in step with the error, on a mild shift.** On the 97 most isolated geometries the errors grow by ×1.17 per cell (Cp) and ×1.28 in Cd (2.0 → 2.6 counts); calibrated σ grows by ×1.11 and ×1.28, and per-cell 90 % coverage on the OOD side is 0.89–0.90. Per car, mean σ(Cp) tells OOD from ID cars with AUROC 0.82 [0.75, 0.89] and σ(Cd) with 0.68 [0.58, 0.77], while the Cd error itself only reaches 0.57 [0.47, 0.66]. σ follows geometric novelty (Spearman with `ood_score`: 0.61 [0.48, 0.70] for σ(Cp), 0.34 [0.19, 0.48] for σ(Cd), ID + OOD) more than the Cd error does (0.10 [-0.07, 0.26]). So σ works as a novelty flag; it still does not rank individual cars' Cd errors (Spearman +0.13 [-0.08, +0.33] on the OOD cars). The shift stays inside the DrivAer notchback morph family; it does not validate σ for other vehicle types.
+
+
+### Does σ rise out of distribution?
+
+| Quantity | ID (val) | OOD (test) | OOD / ID | Error ID | Error OOD | Error OOD / ID | Verdict |
+|---|---|---|---|---|---|---|---|
+| σ(cp) per cell | 0.02153 | 0.02396 | 1.11 | 0.01489 | 0.01734 | 1.17 | σ rises in step with the error |
+| σ(cf_x) per cell | 0.0001964 | 0.0002132 | 1.09 | 0.000153 | 0.0001731 | 1.13 | σ rises in step with the error |
+| σ(cf_y) per cell | 0.0001561 | 0.0001691 | 1.08 | 0.000124 | 0.0001379 | 1.11 | σ rises in step with the error |
+| σ(cf_z) per cell | 0.0001504 | 0.0001617 | 1.08 | 0.0001197 | 0.0001335 | 1.11 | σ rises in step with the error |
+| σ(Cd) per car (counts) | 3.40 | 4.33 | 1.28 | 2.00 | 2.56 | 1.28 | σ rises in step with the error |
+
+Error columns: mean |err| per cell for fields, Cd MAE for σ(Cd).
+
+### Does per-car σ flag the OOD cars?
+
+| Score | AUROC (OOD test vs ID val) [95 % CI] | Reading |
+|---|---|---|
+| σ(Cd) per car | 0.68 [0.58, 0.77] | better than chance |
+| mean per-cell σ(Cp) per car | 0.82 [0.75, 0.89] | better than chance |
+| \|Cd error\| per car (reference: how separable the errors are) | 0.57 [0.47, 0.66] | chance level |
+
+| Spearman with geometric novelty (`ood_score`) | Cars | ρ [95 % CI] | Reading |
+|---|---|---|---|
+| σ(Cd), OOD test cars | 97 | +0.20 [+0.00, +0.39] | weakly positive (CI lower bound ≈ 0) |
+| σ(Cd), ID + OOD | 145 | +0.34 [+0.19, +0.48] | positive |
+| mean per-cell σ(Cp), ID + OOD | 145 | +0.61 [+0.48, +0.70] | positive |
+| \|Cd error\|, OOD test cars (reference) | 97 | +0.00 [-0.20, +0.21] | indistinguishable from zero |
+| \|Cd error\|, ID + OOD (reference) | 145 | +0.10 [-0.07, +0.26] | indistinguishable from zero |
+
+### Calibration on the OOD side (temperatures from ID val)
+
+| Quantity | 50 % | 90 % | 95 % | NLL | Spearman(σ, \|err\|) [95 % CI] |
+|---|---|---|---|---|---|
+| cp (per cell) | 0.54 | 0.90 | 0.94 | -2.79 | 0.61 [0.60, 0.62] |
+| cf_x (per cell) | 0.51 | 0.89 | 0.93 | -7.56 | 0.70 [0.70, 0.70] |
+| cf_y (per cell) | 0.52 | 0.89 | 0.94 | -8.00 | 0.74 [0.74, 0.74] |
+| cf_z (per cell) | 0.51 | 0.89 | 0.94 | -8.04 | 0.74 [0.74, 0.75] |
+| Cd (per car, ID val) | 0.60 | 0.88 | 0.92 | – | -0.21 [-0.48, +0.08] |
+| Cd (per car, OOD test) | 0.65 | 0.92 | 0.96 | – | +0.13 [-0.08, +0.33] |
+
+Per-cell Spearman CIs bootstrap whole cars (2,000 cells each, 500 resamples); per-car CIs bootstrap cars (10,000 resamples). ID per-cell coverage is not listed: the temperatures are fitted there.
