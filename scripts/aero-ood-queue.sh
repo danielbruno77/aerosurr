@@ -14,7 +14,7 @@
 # and the RANS mapping CPUs (offset 5).
 #   start:    scripts/aero-ood-queue.sh
 #   monitor:  tail -f ~/aero/logs/aero-ood/*_worker_*.log
-#             tail -f "$(ls -t ~/aero/logs/aero-ood/*_ood_m*.log | head -1)"   (member log)
+#             tail -f "$(command ls -t ~/aero/logs/aero-ood/*_ood_m*.log | head -1)"  (member)
 set -euo pipefail
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 A=$REPO/.venv/bin/aerosurr

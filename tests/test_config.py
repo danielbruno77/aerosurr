@@ -77,3 +77,15 @@ def test_step_budget_schedule() -> None:
     s400 = resolve_schedule(tc, 400)
     assert s400.epochs == 50 and s400.eval_every == 5 and s400.full_eval_every == 25
     assert resolve_schedule(TrainConfig(epochs=3), 7).epochs == 3  # no budget: unchanged
+
+
+def test_data_variant_overlay(config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AEROSURR_DATA_VARIANT", raising=False)
+    base, geo = load_data(config_dir), load_data(config_dir, "geometry")
+    assert base.store.version == "v1" and base.store.stats_split == "full_train"
+    assert geo.store.version == "v1_geometry" and geo.store.stats_split == "geometry_train"
+    assert geo.store.full_splits == ["geometry_val", "geometry_test"]
+    assert geo.store.pool_size == base.store.pool_size and geo.store.seed == base.store.seed
+    assert geo.fields == base.fields  # everything outside `store` is inherited
+    monkeypatch.setenv("AEROSURR_DATA_VARIANT", "geometry")
+    assert load_data(config_dir).store.version == "v1_geometry"
