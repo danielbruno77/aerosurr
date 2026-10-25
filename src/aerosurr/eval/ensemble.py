@@ -94,10 +94,63 @@ class _Acc:
     cd_mean: list[float]
     cd_std: list[float]
     cd_true: list[float]
+    cd_members: list[list[float]]
+    sigma_cell_raw: list[NDArray[np.float64]]  # per run: cell-mean uncalibrated sigma
+    abs_err_cell: list[NDArray[np.float64]]  # per run: cell-mean |err|
 
     @classmethod
     def empty(cls) -> _Acc:
-        return cls(np.zeros(4), 0, {q: np.zeros(4) for q in Z}, np.zeros(4), [], [], [], [], [], [])
+        z = np.zeros(4)
+        return cls(
+            z.copy(), 0, {q: z.copy() for q in Z}, z.copy(), [], [], [], [], [], [], [], [], []
+        )
+
+    def per_run(self, runs: list[str], t_cd: float) -> dict[str, dict[str, Any]]:
+        """Per-run Cd (ensemble mean, calibrated member spread, truth, members) and the
+        cell-mean uncalibrated sigma and |err| per field."""
+        return {
+            r: {
+                "cd_mean": self.cd_mean[i],
+                "cd_std_cal": t_cd * self.cd_std[i],
+                "cd_true": self.cd_true[i],
+                "cd_members": self.cd_members[i],
+                "sigma_cell_mean_raw": dict(
+                    zip(FIELD_NAMES, self.sigma_cell_raw[i].tolist(), strict=True)
+                ),
+                "abs_err_cell_mean": dict(
+                    zip(FIELD_NAMES, self.abs_err_cell[i].tolist(), strict=True)
+                ),
+            }
+            for i, r in enumerate(runs)
+        }
+
+
+def cluster_spearman_ci(
+    sig: list[NDArray[np.float64]],
+    err: list[NDArray[np.float64]],
+    n_boot: int = 500,
+    per_run: int = 2_000,
+    seed: int = 0,
+) -> list[list[float]]:
+    """Per-field 95 % CI of the per-cell Spearman(sigma, |err|), bootstrapping whole runs
+    (cells of one car are not independent), on a fixed subsample of cells per run."""
+    rng = np.random.default_rng(seed)
+    sub = [rng.permutation(len(s))[:per_run] for s in sig]
+    ss = [s[i] for s, i in zip(sig, sub, strict=True)]
+    ee = [e[i] for e, i in zip(err, sub, strict=True)]
+    n, out = len(ss), []
+    for f in range(ss[0].shape[1]):
+        boots = []
+        for _ in range(n_boot):
+            pick = rng.integers(0, n, n)
+            boots.append(
+                spearman(
+                    np.concatenate([ss[j][:, f] for j in pick]),
+                    np.concatenate([ee[j][:, f] for j in pick]),
+                )
+            )
+        out.append([float(x) for x in np.percentile(boots, [2.5, 97.5])])
+    return out
 
 
 def evaluate_ensemble(
@@ -154,6 +207,9 @@ def evaluate_ensemble(
             acc.cd_mean.append(float(np.mean(cds)))
             acc.cd_std.append(float(np.std(cds)))
             acc.cd_true.append(float(index[r].coeffs["varying"]["cd"]))
+            acc.cd_members.append([float(x) for x in cds])
+            acc.sigma_cell_raw.append(var.sqrt().mean(dim=0).cpu().numpy())
+            acc.abs_err_cell.append(err.abs().mean(dim=0).cpu().numpy())
             if t_field is not None:
                 sig = t_field * var.sqrt()
                 for q in Z:
@@ -176,6 +232,7 @@ def evaluate_ensemble(
     cd_err, cd_std = cd_arrays(test)
     sig_cd = t_cd * cd_std
     ss, ee = np.concatenate(test.sig_sample), np.concatenate(test.err_sample)
+    sp_ci = cluster_spearman_ci(test.sig_sample, test.err_sample)
     fields = FIELD_NAMES
     return {
         "members": len(members),
@@ -188,14 +245,13 @@ def evaluate_ensemble(
         },
         "nll": dict(zip(fields, (test.nll / test.n).tolist(), strict=True)),
         "spearman_point": {f: spearman(ss[:, i], ee[:, i]) for i, f in enumerate(fields)},
+        "spearman_point_ci95": dict(zip(fields, sp_ci, strict=True)),
         "cd_mae_counts": float(np.abs(cd_err).mean() * 1000),
         "cd_sigma_mean_counts": float(sig_cd.mean() * 1000),
         "cd_spearman_car": spearman(sig_cd, np.abs(cd_err)),
         "cd_coverage": {str(q): float(np.mean(np.abs(cd_err) <= Z[q] * sig_cd)) for q in Z},
-        "per_run": {
-            r: {"cd_mean": m, "cd_std_cal": t_cd * sd, "cd_true": t}
-            for r, m, sd, t in zip(test_runs, test.cd_mean, test.cd_std, test.cd_true, strict=True)
-        },
+        "per_run": test.per_run(test_runs, t_cd),
+        "per_run_calib": cal.per_run(calib_runs, t_cd),
     }
 
 

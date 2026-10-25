@@ -111,7 +111,7 @@ class DownloadConfig(_Strict):
 
 
 class StoreConfig(_Strict):
-    version: str = Field(default="v1", pattern=r"^v\d+$")
+    version: str = Field(default="v1", pattern=r"^v\d+(_[a-z]+)?$", description="store dir")
     pool_size: int = Field(default=500_000, gt=0, description="training cells kept per run")
     seed: int = 0
     full_splits: list[str] = Field(
@@ -293,8 +293,25 @@ def load_paths(cfg_dir: Path | None = None) -> PathsConfig:
     return PathsConfig.model_validate(raw).resolved()
 
 
-def load_data(cfg_dir: Path | None = None) -> DataConfig:
-    return DataConfig.model_validate(_read_yaml(config_dir(cfg_dir) / "data.yaml"))
+def _merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def load_data(cfg_dir: Path | None = None, variant: str | None = None) -> DataConfig:
+    """`data.yaml`, with `data/<variant>.yaml` merged on top (default: $AEROSURR_DATA_VARIANT).
+
+    A variant is a separate experiment on the same raw data, e.g. `geometry`: the OOD split
+    with its own store directory and normalisation statistics.
+    """
+    d = config_dir(cfg_dir)
+    raw = _read_yaml(d / "data.yaml")
+    variant = variant if variant is not None else os.environ.get("AEROSURR_DATA_VARIANT")
+    if variant:
+        raw = _merge(raw, _read_yaml(d / "data" / f"{variant}.yaml"))
+    return DataConfig.model_validate(raw)
 
 
 def load_rans(name: str = "coarse", cfg_dir: Path | None = None) -> RansConfig:

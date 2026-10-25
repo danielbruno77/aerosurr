@@ -8,6 +8,7 @@ regenerated at any point of the project.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -274,6 +275,119 @@ ENSEMBLES = (
 )
 
 
+OOD_ENSEMBLE = "ensemble_ood_v1"
+
+
+def _ci_verdict(lo: float, hi: float, pos: str, neg: str, none: str) -> str:
+    return pos if lo > 0 else neg if hi < 0 else none
+
+
+def _ratio_verdict(rs: float, re_: float) -> str:
+    if rs < 1.05:
+        return "σ does not rise"
+    if rs / re_ < 0.8:
+        return "σ rises, but less than the error (OOD intervals too narrow)"
+    if rs / re_ > 1.25:
+        return "σ rises more than the error (OOD intervals conservative)"
+    return "σ rises in step with the error"
+
+
+def _ood_section(o: dict[str, Any], w: Callable[[str], None]) -> None:
+    """Out-of-distribution check: ID = the OOD split's val cars, OOD = its test cars."""
+    i, d, r = o["id"], o["ood"], o["ratio_ood_over_id"]
+    pc = o["per_cell_ood"]
+    w(
+        f"## Out-of-distribution check: `{o['split']}` (OOD, {d['n']} cars) vs "
+        f"`{o['calib']}` (ID, {i['n']} cars)\n"
+    )
+    w(
+        f"`{OOD_ENSEMBLE}`: 5 heteroscedastic GeoTransolver members with ensemble_v2's config "
+        "and budget, trained on the official `geometry` split (339 training cars; "
+        "normalisation statistics from those cars only) and kept apart from every `full`-split "
+        "result. Test cars are the 20 % most isolated STL surfaces (mean Chamfer RMS distance "
+        "to the 10 nearest public geometries, the dataset's `ood_score`); val cars come from "
+        "the training-side population. Temperatures are fitted on the val cars, so the ID "
+        "side is calibrated by construction and the OOD side shows what survives the shift. "
+        "σ below is calibrated; per-cell means are cell means per car, averaged over cars.\n"
+    )
+    w("### Does σ rise out of distribution?\n")
+    w(
+        "| Quantity | ID (val) | OOD (test) | OOD / ID "
+        "| Error ID | Error OOD | Error OOD / ID | Verdict |"
+    )
+    w("|---|---|---|---|---|---|---|---|")
+    for f in ("cp", "cf_x", "cf_y", "cf_z"):
+        rs, re_ = r["sigma_cell"][f], r["abs_err_cell"][f]
+        w(
+            f"| σ({f}) per cell | {i['sigma_cell_mean'][f]:.4g} | {d['sigma_cell_mean'][f]:.4g} | "
+            f"{rs:.2f} | {i['abs_err_cell_mean'][f]:.4g} | {d['abs_err_cell_mean'][f]:.4g} | "
+            f"{re_:.2f} | {_ratio_verdict(rs, re_)} |"
+        )
+    w(
+        f"| σ(Cd) per car (counts) | {i['cd_sigma_mean_counts']:.2f} | "
+        f"{d['cd_sigma_mean_counts']:.2f} | {r['cd_sigma']:.2f} | {i['cd_mae_counts']:.2f} | "
+        f"{d['cd_mae_counts']:.2f} | {r['cd_mae']:.2f} | "
+        f"{_ratio_verdict(r['cd_sigma'], r['cd_mae'])} |"
+    )
+    w("\nError columns: mean |err| per cell for fields, Cd MAE for σ(Cd).\n")
+    w("### Does per-car σ flag the OOD cars?\n")
+    w("| Score | AUROC (OOD test vs ID val) [95 % CI] | Reading |")
+    w("|---|---|---|")
+    labels = {
+        "cd_sigma": "σ(Cd) per car",
+        "cp_sigma_cell": "mean per-cell σ(Cp) per car",
+        "cd_abs_err": "|Cd error| per car (reference: how separable the errors are)",
+    }
+    for k, lab in labels.items():
+        a = o["auroc_ood_vs_id"][k]
+        lo, hi = a["ci95"]
+        reading = (
+            "better than chance"
+            if lo > 0.5
+            else "worse than chance"
+            if hi < 0.5
+            else "chance level"
+        )
+        w(f"| {lab} | {a['auroc']:.2f} [{lo:.2f}, {hi:.2f}] | {reading} |")
+    w("")
+    w("| Spearman with geometric novelty (`ood_score`) | Cars | ρ [95 % CI] | Reading |")
+    w("|---|---|---|---|")
+    nl = {
+        "cd_sigma_vs_novelty_ood": "σ(Cd), OOD test cars",
+        "cd_sigma_vs_novelty_all": "σ(Cd), ID + OOD",
+        "cp_sigma_vs_novelty_all": "mean per-cell σ(Cp), ID + OOD",
+        "cd_abs_err_vs_novelty_ood": "|Cd error|, OOD test cars (reference)",
+        "cd_abs_err_vs_novelty_all": "|Cd error|, ID + OOD (reference)",
+    }
+    for k, lab in nl.items():
+        x = o["novelty"][k]
+        lo, hi = x["ci95"]
+        reading = _ci_verdict(lo, hi, "positive", "negative", "indistinguishable from zero")
+        w(f"| {lab} | {x['n']} | {x['spearman']:+.2f} [{lo:+.2f}, {hi:+.2f}] | {reading} |")
+    w("")
+    w("### Calibration on the OOD side (temperatures from ID val)\n")
+    w("| Quantity | 50 % | 90 % | 95 % | NLL | Spearman(σ, \\|err\\|) [95 % CI] |")
+    w("|---|---|---|---|---|---|")
+    for f in ("cp", "cf_x", "cf_y", "cf_z"):
+        c = [pc["coverage"][q][f] for q in ("0.5", "0.9", "0.95")]
+        lo, hi = pc["spearman_point_ci95"][f]
+        w(
+            f"| {f} (per cell) | {c[0]:.2f} | {c[1]:.2f} | {c[2]:.2f} | {pc['nll'][f]:.2f} | "
+            f"{pc['spearman_point'][f]:.2f} [{lo:.2f}, {hi:.2f}] |"
+        )
+    for side, x in (("ID val", i), ("OOD test", d)):
+        c, (lo, hi) = x["cd"]["coverage"], x["cd"]["spearman_ci95"]
+        w(
+            f"| Cd (per car, {side}) | {c['0.5']:.2f} | {c['0.9']:.2f} | {c['0.95']:.2f} | – | "
+            f"{x['cd']['spearman']:+.2f} [{lo:+.2f}, {hi:+.2f}] |"
+        )
+    w(
+        "\nPer-cell Spearman CIs bootstrap whole cars (2,000 cells each, 500 resamples); "
+        f"per-car CIs bootstrap cars ({o['n_boot']:,} resamples). ID per-cell coverage is "
+        "not listed: the temperatures are fitted there.\n"
+    )
+
+
 def build_report(runs: Path, store: Path, out_md: Path, fig_dir: Path) -> list[str]:
     """Write `out_md` (+ figures). Returns the sections that had data."""
     from aerosurr.data.store import load_index
@@ -492,6 +606,11 @@ def build_report(runs: Path, store: Path, out_md: Path, fig_dir: Path) -> list[s
                 crow(k, "epistemic, raw", "1", chk["raw"])
                 crow(k, "epistemic, calibrated", f"{chk['temperature']:.2f}", chk["calibrated"])
             w("")
+
+    ood = _load(runs / OOD_ENSEMBLE / "ood.json")
+    if ood:
+        done.append("ood")
+        _ood_section(ood, w)
 
     header = (
         "# Results\n\nGenerated by `aerosurr report` from the evaluation JSON under "

@@ -129,3 +129,29 @@ def test_filler_pre_empts_for_mf_and_requeues(
     t.join(timeout=15)
     assert not t.is_alive()
     assert (job.runs / "ens2_m0" / "summary.json").is_file()  # re-run to completion afterwards
+
+
+def test_filler_after_mf_done_waits_for_the_done_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    exe = tmp_path / "aerosurr"
+    monkeypatch.setattr(eq, "mf_processes", lambda exclude=None: [])
+    exe.write_text(f"#!{sys.executable}\n" + FAKE_EXE)
+    exe.chmod(0o755)
+    mf_log, rans_log = tmp_path / "mf.log", tmp_path / "rans.log"
+    mf_log.write_text(MF_LOG_WAITING_25)  # a long predicted gap: the plain filler would start
+    rans_log.write_text(batch_log(31))
+    job = eq.Job("ood", 1, "m", "t", 100, tmp_path / "runs", tmp_path / "claims")
+    t = threading.Thread(
+        target=eq.run_filler,
+        args=(job, str(exe), 0, "0", "s", mf_log, rans_log, 0.0001, 0.0, 0.05, 0.05),
+        kwargs={"after_mf_done": True},
+        daemon=True,
+    )
+    t.start()
+    time.sleep(0.5)
+    assert not (job.claims / "m0").exists()  # still waiting for "MF queue done"
+    mf_log.write_text(MF_LOG_WAITING_25 + "[05:00:00] MF queue done\n")
+    t.join(timeout=15)
+    assert not t.is_alive()
+    assert (job.runs / "ood_m0" / "summary.json").is_file()

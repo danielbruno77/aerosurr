@@ -1,0 +1,10 @@
+# OOD check (SPEC §5.4): the official `geometry` split (339 / 48 / 97; test = the 20 % most
+# isolated STL surfaces by mean Chamfer distance to their 10 nearest neighbours).
+# Its own store directory, so nothing mixes with the `full`-split results: training pools
+# are hard links to v1 (identical: same pool size and seed), val and test keep full meshes,
+# and the normalisation statistics come from geometry_train only.
+# Select with `aerosurr --data-variant geometry ...` or AEROSURR_DATA_VARIANT=geometry.
+store:
+  version: v1_geometry
+  full_splits: [geometry_val, geometry_test]
+  stats_split: geometry_train

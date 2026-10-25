@@ -6,12 +6,12 @@ import json
 import shlex
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import typer
 
 from aerosurr import __version__
-from aerosurr.config import DataConfig, PathsConfig, load_data, load_paths
+from aerosurr.config import DataConfig, PathsConfig, StoreConfig, load_data, load_paths
 from aerosurr.ops import configure_runtime, setup_logging
 
 if TYPE_CHECKING:  # torch is imported lazily: `aerosurr --help` stays fast
@@ -40,12 +40,13 @@ BEGIN, END = "<!-- BEGIN GENERATED", "<!-- END GENERATED -->"
 
 class _State:
     config_dir: Path | None = None
+    data_variant: str | None = None
 
     def paths(self) -> PathsConfig:
         return load_paths(self.config_dir)
 
     def data(self) -> DataConfig:
-        return load_data(self.config_dir)
+        return load_data(self.config_dir, self.data_variant)
 
 
 state = _State()
@@ -81,8 +82,17 @@ def main(
             "--config-dir", envvar="AEROSURR_CONFIG_DIR", help="Directory of yaml configs."
         ),
     ] = None,
+    data_variant: Annotated[
+        str | None,
+        typer.Option(
+            "--data-variant",
+            envvar="AEROSURR_DATA_VARIANT",
+            help="Merge configs/data/<variant>.yaml onto data.yaml (e.g. geometry: OOD split).",
+        ),
+    ] = None,
 ) -> None:
     state.config_dir = config_dir
+    state.data_variant = data_variant
 
 
 @app.command()
@@ -298,6 +308,41 @@ def _store_one(args: tuple[str, str, str, str, str, int, bool, int]) -> dict[str
     return asdict(e)
 
 
+def _store_meta(sc: StoreConfig, revision: str) -> dict[str, Any]:
+    return {
+        "pool_size": sc.pool_size,
+        "seed": sc.seed,
+        "full_splits": sc.full_splits,
+        "revision": revision,
+    }
+
+
+def _link_store_runs(
+    src: Path, store: Path, runs: list[str], full: set[str], sc: StoreConfig
+) -> dict[str, Any]:
+    """Hard-link `runs` from store `src` where its entry suffices (pool identical: same pool
+    size and seed; full mesh present when needed). Returns the linked entries."""
+    import os
+
+    from aerosurr.data.store import INDEX, load_index
+
+    meta = json.loads((src / INDEX).read_text())
+    if (meta["pool_size"], meta["seed"]) != (sc.pool_size, sc.seed):
+        raise typer.BadParameter(f"{src}: pool size/seed differ from this store's")
+    have = load_index(src)
+    store.mkdir(parents=True, exist_ok=True)
+    out = {}
+    for r in runs:
+        e = have.get(r)
+        if e is None or not (src / e.path).is_file() or (r in full and not e.full):
+            continue
+        dst = store / e.path
+        if not dst.exists():
+            os.link(src / e.path, dst)
+        out[r] = e
+    return out
+
+
 @data_app.command("build-store")
 def data_build_store(
     runs: Annotated[
@@ -306,6 +351,13 @@ def data_build_store(
     workers: Annotated[int, typer.Option(min=1, help="Parallel processes.")] = 8,
     cpus: Annotated[str | None, typer.Option(help="Pin the workers to these CPUs.")] = None,
     report: Annotated[Path | None, typer.Option(help="Validation report (markdown).")] = None,
+    link_from: Annotated[
+        str | None,
+        typer.Option(
+            help="Store version to hard-link runs from when its entry already has every "
+            "group needed here (same pool size and seed); the rest are built."
+        ),
+    ] = None,
 ) -> None:
     """Build the compact store and validate every run's integrated forces on the way."""
     import os
@@ -324,6 +376,12 @@ def data_build_store(
     run_list = runs.split(",") if runs else all_runs(manifest)
     entries = load_index(store)
     todo = [r for r in run_list if r not in entries or not (store / entries[r].path).is_file()]
+    if link_from:
+        linked = _link_store_runs(paths.data_store / link_from, store, todo, full, sc)
+        entries |= linked
+        todo = [r for r in todo if r not in linked]
+        save_index(store, entries, _store_meta(sc, data.source.revision))
+        typer.echo(f"linked {len(linked)} runs from {link_from}; {len(todo)} to build")
     if cpus:
         os.sched_setaffinity(0, parse_cpus(cpus))
     log_file = setup_logging(paths.logs / "aero-store", "build")
@@ -338,12 +396,7 @@ def data_build_store(
         workers,
         log_file,
     )
-    meta = {
-        "pool_size": sc.pool_size,
-        "seed": sc.seed,
-        "full_splits": sc.full_splits,
-        "revision": data.source.revision,
-    }
+    meta = _store_meta(sc, data.source.revision)
     fj, fsj = data.fields.model_dump_json(), data.freestream.model_dump_json()
     args = [(str(raw), str(store), r, fj, fsj, sc.pool_size, r in full, sc.seed) for r in todo]
     with ProcessPoolExecutor(max_workers=workers) as pool:
@@ -969,6 +1022,36 @@ def eval_ensemble_cd(
     typer.echo(json.dumps(res, indent=1))
 
 
+@eval_app.command("ood")
+def eval_ood(
+    name: Annotated[str, typer.Option(help="Ensemble name (dir under paths.runs).")],
+    calib: Annotated[str, typer.Option(help="In-distribution (calibration) split.")] = (
+        "geometry_val"
+    ),
+    split: Annotated[str, typer.Option(help="Out-of-distribution (report) split.")] = (
+        "geometry_test"
+    ),
+    n_boot: Annotated[int, typer.Option(help="Bootstrap resamples.")] = 10_000,
+) -> None:
+    """OOD check: does sigma rise from the ID side (`calib`) to the OOD side (`split`)?
+    Reads <name>/ensemble_<split>.json; writes <name>/ood.json."""
+    from aerosurr.data.splits import load_manifest
+    from aerosurr.eval.ood import ood_check, read_novelty
+
+    paths = state.paths()
+    out = paths.runs / name
+    res = json.loads((out / f"ensemble_{split}.json").read_text())
+    manifest = load_manifest(paths.data_raw / "splits/manifest.json")
+    if set(res["per_run_calib"]) != set(manifest[calib]) or set(res["per_run"]) != set(
+        manifest[split]
+    ):
+        raise typer.BadParameter(f"{out}: runs do not match {calib} / {split}")
+    novelty = read_novelty(paths.data_raw / "splits/chamfer_metrics.csv")
+    chk = ood_check(res, novelty, n_boot=n_boot) | {"calib": calib, "split": split}
+    (out / "ood.json").write_text(json.dumps(chk, indent=1))
+    typer.echo(json.dumps({k: chk[k] for k in ("ratio_ood_over_id", "auroc_ood_vs_id")}, indent=1))
+
+
 @eval_app.command("run")
 def eval_run(
     run_dir: Annotated[Path, typer.Argument(help="A training run directory.")],
@@ -1049,6 +1132,15 @@ def ensemble_worker(
     ] = None,
     member_hours: Annotated[float, typer.Option(help="filler: expected member wall time.")] = 2.6,
     margin_hours: Annotated[float, typer.Option(help="filler: extra slack required.")] = 0.4,
+    after_mf_done: Annotated[
+        bool, typer.Option("--after-mf-done", help="filler: start only once the MF queue is done.")
+    ] = False,
+    calib: Annotated[str, typer.Option(help="primary: calibration split.")] = "full_val",
+    split: Annotated[str, typer.Option(help="primary: report split.")] = "full_test",
+    ood: Annotated[
+        bool, typer.Option("--ood", help="primary: also run `eval ood` on calib vs split.")
+    ] = False,
+    session: Annotated[str, typer.Option(help="Log dir name under paths.logs.")] = "aero-ens2",
 ) -> None:
     """Run ensemble members from a shared queue; GPU-0 filler yields to the MF queue."""
     import logging
@@ -1063,19 +1155,24 @@ def ensemble_worker(
     paths = state.paths()
     if role not in ("primary", "filler"):
         raise typer.BadParameter("role must be primary or filler")
-    setup_logging(paths.logs / "aero-ens2", f"worker_{role}_gpu{gpu}")
+    setup_logging(paths.logs / session, f"worker_{role}_gpu{gpu}")
     os.sched_setaffinity(0, parse_cpus(cpus))
     exe = shutil.which("aerosurr") or str(Path(sys.executable).with_name("aerosurr"))
     job = Job(prefix, members, model, train, seed0, paths.runs, paths.runs / name / "claims")
-    session = "aero-ens2"
     log = logging.getLogger("aerosurr.ens_queue")
 
     def finish() -> None:
         dirs = [str(paths.runs / member_name(prefix, k)) for k in range(members)]
         env = os.environ | {"CUDA_VISIBLE_DEVICES": str(gpu)}
         log.info("primary: all %d members done; calibrating %s", members, name)
-        subprocess.run([exe, "eval", "ensemble", *dirs, "--name", name], env=env, check=True)
-        subprocess.run([exe, "report"], cwd=Path(__file__).resolve().parents[2], check=True)
+        cal = ["--calib", calib, "--split", split]
+        subprocess.run([exe, "eval", "ensemble", *dirs, "--name", name, *cal], env=env, check=True)
+        if ood:
+            subprocess.run([exe, "eval", "ood", "--name", name, *cal], env=env, check=True)
+        # The report always reads the default (full-split) store; variant results are in runs.
+        env_report = {k: v for k, v in os.environ.items() if k != "AEROSURR_DATA_VARIANT"}
+        repo = Path(__file__).resolve().parents[2]
+        subprocess.run([exe, "report"], cwd=repo, env=env_report, check=True)
         log.info("primary: %s calibrated; docs/results.md regenerated", name)
 
     if role == "primary":
@@ -1083,7 +1180,18 @@ def ensemble_worker(
     else:
         rans_log = (paths.logs / "aero-rans" / "latest.log").resolve()
         mf_log = paths.logs / "aero-train0" / "mf_queue.log"
-        run_filler(job, exe, gpu, cpus, session, mf_log, rans_log, member_hours, margin_hours)
+        run_filler(
+            job,
+            exe,
+            gpu,
+            cpus,
+            session,
+            mf_log,
+            rans_log,
+            member_hours,
+            margin_hours,
+            after_mf_done=after_mf_done,
+        )
 
 
 # --------------------------------------------------------------------------- viewer

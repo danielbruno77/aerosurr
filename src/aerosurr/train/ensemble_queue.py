@@ -7,7 +7,8 @@ and on one GPU. Two kinds of worker take them:
   member still running elsewhere, then calibrates the ensemble and writes the report.
 - `filler` (GPU 0, the main-model GPU): runs a member only while the multi-fidelity queue
   (`scripts/aero-mf-queue.sh`) is waiting for RANS data, and only when the predicted wait
-  is longer than a member. As a hard guarantee it pre-empts its member within seconds of
+  is longer than a member; or, with `after_mf_done`, only once the MF queue is done.
+  As a hard guarantee it pre-empts its member within seconds of
   any MF/HF train or eval process appearing; the member is discarded and re-queued, to
   start again from scratch (a member never resumes on the other GPU).
 """
@@ -244,8 +245,10 @@ def run_filler(
     margin_h: float,
     poll_s: float = 120.0,
     watch_s: float = 3.0,
+    after_mf_done: bool = False,
 ) -> None:
-    """Run members on `gpu` only in predicted MF gaps; pre-empt the moment MF needs it."""
+    """Run members on `gpu` only in predicted MF gaps (or, with `after_mf_done`, only once
+    the MF queue has logged that it is done); pre-empt the moment MF needs it."""
     me = os.getpid()
     need = timedelta(hours=member_h + margin_h)
     last = ""
@@ -253,6 +256,8 @@ def run_filler(
         busy = bool(mf_processes({me}))
         mf_text = _read(mf_log)
         free = gpu0_free_for(mf_text, _read(batch_log), busy)
+        if after_mf_done and parse_mf_log(mf_text).stage != "done":
+            free = timedelta(0)
         if free < need:
             why = "MF is using GPU 0" if busy else f"MF stage {parse_mf_log(mf_text).stage}"
             msg = f"filler: waiting ({why}; predicted gap {free} < {need})"
