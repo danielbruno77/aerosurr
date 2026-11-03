@@ -144,3 +144,47 @@ def test_seed_stats_and_paired_verdict() -> None:
     assert paired_verdict([5.0, 7.0, 6.0], [6.5, 8.0, 7.2])["verdict"] == "within seed spread"
     one = paired_verdict([5.0, None, None], [6.0, None, None])
     assert one["verdict"] == "single seed" and one["diff"] == [-1.0, None, None]
+
+
+def test_compute_section(tmp_path: Path) -> None:
+    runs_dir, rans = tmp_path / "runs", tmp_path / "rans"
+    hours = {
+        "geotransolver_main_v1": 2.5,
+        "transolver_main_v1": 2.75,
+        "ens2_m0": 2.5,
+        "ens_m0": 0.8,
+        "ood_m0": 2.1,
+        "mf_n11_s1": 0.7,
+        "hf_n50": 0.7,
+        "transolver_ds_full": 0.8,
+        "pointnet_baseline_v1": 0.2,
+        "smoke_transolver": 0.15,
+        "mystery_run": 1.0,
+    }
+    for name, h in hours.items():
+        (runs_dir / name).mkdir(parents=True)
+        (runs_dir / name / "summary.json").write_text(json.dumps({"hours": h}))
+    (runs_dir / "no_hours").mkdir()
+    (runs_dir / "no_hours" / "summary.json").write_text("{}")
+    for i, (status, s) in enumerate((("done", 600.0), ("done", 900.0), ("failed", 50.0))):
+        d = rans / "batch" / f"run_{i}_coarse_np24"
+        d.mkdir(parents=True)
+        (d / "aerosurr_run.json").write_text(json.dumps({"status": status, "total_s": s}))
+
+    out = tmp_path / "results.md"
+    done = build_report(runs_dir, tmp_path / "store", out, tmp_path / "fig", rans=rans)
+    assert done == ["compute"]
+    text = out.read_text()
+    for row in (
+        "| Main models | 2 | 5.2 |",
+        "| Ensembles (v1, v2) | 2 | 3.3 |",
+        "| OOD ensemble | 1 | 2.1 |",
+        "| Data efficiency | 1 | 0.8 |",
+        "| Multi-fidelity study (MF + HF-only, 3 seeds) | 2 | 1.4 |",
+        "| Baseline (PointNet) | 1 | 0.2 |",
+        "| Smoke test | 1 | 0.1 |",
+        "| Other | 1 | 1.0 |",
+        "| **Total** | **11** | **14.2** |",
+        "2 cases, median 12.5 min per case, 0.4 h in all",
+    ):
+        assert row in text, row

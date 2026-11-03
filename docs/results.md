@@ -189,3 +189,22 @@ Error columns: mean |err| per cell for fields, Cd MAE for σ(Cd).
 | Cd (per car, OOD test) | 0.65 | 0.92 | 0.96 | – | +0.13 [-0.08, +0.33] |
 
 Per-cell Spearman CIs bootstrap whole cars (2,000 cells each, 500 resamples); per-car CIs bootstrap cars (10,000 resamples). ID per-cell coverage is not listed: the temperatures are fitted there.
+
+## Compute
+
+Hardware: AMD Threadripper 9980X (64 cores) and 2 × RTX 5090, one workstation.
+GPU-hours are training wall time on one GPU, from each run's `summary.json`;
+evaluation and the store build are not included.
+
+| Work | Runs | GPU-hours |
+|---|---|---|
+| Main models | 2 | 5.3 |
+| Ensembles (v1, v2) | 10 | 16.6 |
+| OOD ensemble | 5 | 10.7 |
+| Data efficiency | 4 | 3.3 |
+| Multi-fidelity study (MF + HF-only, 3 seeds) | 18 | 13.1 |
+| Baseline (PointNet) | 1 | 0.2 |
+| Smoke test | 1 | 0.2 |
+| **Total** | **41** | **49.3** |
+
+Coarse RANS (OpenFOAM, one case at a time on 24 cores): 100 cases, median 12.7 min per case, 21.3 h in all (`total_s` of each case).

@@ -1,11 +1,12 @@
 # SPEC: aerosurr, a multi-fidelity 3D surface-flow surrogate on DrivAerML
 
-> **Status: DRAFT v0.2 (2026-10-24, after Day 0).** Written by Claude from Daniel's brief
+> **Status: v1.0 (2026-11-03), project complete.** Days 0–3 ran on 24–25 Oct 2026 (§9)
+> and design ranking (§5.5) was added on 3 Nov. Written by Claude from Daniel's brief
 > plus a read of the real DrivAerML repository (file list, sizes, CSV headers, split
-> manifest). v0.2 records what Day 0 verified on real files and on the machine; those
-> items are marked **[VERIFIED 2026-10-24]**. Anything marked **[PROPOSAL]** is a
-> design choice awaiting Daniel's sign-off. Anything still marked **[VERIFY]** must be
-> confirmed by opening a real file before code depends on it.
+> manifest). Items checked on real files and on the machine are marked
+> **[VERIFIED 2026-10-24]**; design choices that were carried out are marked
+> **[IMPLEMENTED]** or **[DECISION]**. The one remaining **[VERIFY]** (§5.3, domain
+> extents) is not used by any code. Results are in `docs/results.md`.
 
 ## 1. Goal
 
@@ -143,7 +144,7 @@ They come from the paper (Ashton et al., arXiv 2408.11969), and the data confirm
 
 Values are in `configs/data.yaml: freestream`.
 
-### 4.3 Download list [PROPOSAL]
+### 4.3 Download list [IMPLEMENTED]
 
 All downloads are resumable and pinned to the revision above, and write a
 manifest with sha256 and size per file. They run in tmux session `aero-dl`.
@@ -172,8 +173,8 @@ and TLS times out.
 | T0 | Root CSVs, `README.md`, `LICENSE.txt`, `splits/**`, `surface_cell_areas/**`, all per-run `*.csv` | all 484 | 2,447 files, 0.01 GB — **done 2026-10-24** |
 | T1 | `boundary_1.vtp`, `boundary_cell_area_1.npy`, `drivaer_1.stl` | run_1 | 0.84 GB — **done** |
 | — | **Gate:** inspect T1 (§4.5) before starting T2 — **passed 2026-10-24** | | |
-| T2 | `boundary_i.vtp` + `boundary_cell_area_i.npy` in order `full_test`, `full_val`, `super_scarce_train`, `scarce_train`, `medium_train`, rest of `full_train` | 484 | 968 files, **327.4 GB** (measured). Started 2026-10-24 04:10 in tmux `aero-dl`, ~90 MB/s, ETA ~1 h |
-| T3 | `drivaer_i.stl` for the RANS subset (§6) | ~100 | ~14 GB |
+| T2 | `boundary_i.vtp` + `boundary_cell_area_i.npy` in order `full_test`, `full_val`, `super_scarce_train`, `scarce_train`, `medium_train`, rest of `full_train` | 484 | 968 files, **327.4 GB** (measured). Started 2026-10-24 04:10 in tmux `aero-dl`, ~90 MB/s — **done** |
+| T3 | `drivaer_i.stl` for the RANS subset (§6) | 100 | 100 files, 14.24 GB — **done** |
 
 ### 4.4 Disk budget
 
@@ -264,7 +265,7 @@ its networks, rather than adopting its Hydra recipes wholesale.
   Data efficiency uses the nested `super_scarce` ⊂ `scarce` ⊂ `medium` ⊂ `full`
   sets.
 
-### 5.3 Multi-fidelity correction (CPU for RANS, GPU 1 for models) [PROPOSAL]
+### 5.3 Multi-fidelity correction (CPU for RANS, GPU 1 for models) [IMPLEMENTED]
 
 - **Low fidelity:** OpenFOAM v2506, `snappyHexMesh` from `drivaer_i.stl`, steady
   `simpleFoam` with k-ω SST and wall functions. **[DECISION 2026-10-24, measured]**
@@ -356,8 +357,8 @@ its networks, rather than adopting its Hydra recipes wholesale.
 
   **[IMPLEMENTED 2026-10-24]** as `viewer/index.html` (three.js r169), published
   privately as a claude.ai artifact: https://claude.ai/artifact/TUdgikAyaEBpoyzqejMkPn.
-  The current version is a preview with a mid-training checkpoint; it is re-exported with
-  the final model and ensemble σ. GitHub Pages needs a public repo, or a paid plan for a
+  It was re-exported on 2026-10-24 at 23:58 with `geotransolver_main_v1` and calibrated σ
+  from the ensemble_v2 members `ens2_m0`–`ens2_m4`. GitHub Pages needs a public repo, or a paid plan for a
   private one.
 - Figures: parity (Cd and Cl with σ bars), error-versus-HF-count (MF), calibration
   curves, Cp on the surface (truth / prediction / error / σ).
@@ -379,7 +380,7 @@ its networks, rather than adopting its Hydra recipes wholesale.
     covers the inspection gate and the Cp/freestream contract; Day 1 adds the
     reference forces.
 - Local equivalents: `make check` (lint + test), `make test-data`, `make test-gpu`,
-  `make pre-commit`. As of Day 0 there are 54 CPU tests, 3 data tests and 2 GPU tests,
+  `make pre-commit`. As of 2026-11-03 there are 128 tests: 111 CPU, 14 data and 3 GPU,
   all green.
 - **[DECISION]** A self-hosted GPU runner on workstation-III is optional. The repo is
   private as of 2026-10-24, which removes GitHub's main objection (fork PRs running code
@@ -414,22 +415,23 @@ its networks, rather than adopting its Hydra recipes wholesale.
 |---|---|---|
 | **0** ✅ | Connection, GPU stack verified, env, repo skeleton + CI, T0/T1 download, inspection gate passed (all done 2026-10-24) | T2 download running in `aero-dl` (started 04:10) |
 | **1** ✅ | Physics module + reference-force tests green (all 484 runs); compact store (34 GB); PointNet baseline; PhysicsNeMo Transolver training on GPU 0. RANS pipeline built and validated on run_1 (Cd −2 counts vs HF), coarse mesh and 1000 iterations fixed by benchmark | RANS batch running, 1 case × 24 spread ranks (§2); data-efficiency + ensemble queue on GPU 1; MF queue on GPU 0; viewer preview published |
-| **2** | Main-model evaluation and figures; data-efficiency ablation; LF→HF mapping | Ensemble on GPU 1; RANS batch continues |
-| **3** | MF correction and comparison; calibration; viewer; model card; README; final numbers | Remaining ensemble or OOD runs |
+| **2** ✅ | Done 2026-10-24: Transolver evaluated on `full_test` with report and figures; data-efficiency ablation (11/67/133/400 cars); GeoTransolver selected as main model on `full_val`; LF→HF mapping and the MF queue (single seed); viewer re-exported with the final model and σ | ensemble_v1 calibrated; ensemble_v2 (GeoTransolver members) running on both GPUs; RANS batch continues |
+| **3** ✅ | Done 2026-10-25: ensemble_v2 calibrated and reported; per-car Cd σ check; MF study finished, then rerun with 3 seeds; OOD check on the `geometry` split (`ensemble_ood_v1`); model card, README and final numbers. Design ranking (§5.5) added 2026-11-03 | RANS batch finished (100 cases); ensemble_ood_v1 and the MF seed rerun on both GPUs |
 
 ## 10. Open decisions
 
-1. Download list and order in §4.3. T0, T1 and T2 are running as proposed; T3 waits
-   for the RANS subset (5).
+1. ~~Download list and order in §4.3~~: resolved. T0–T3 were downloaded as proposed; T3
+   holds the 100 STLs of the RANS subset (5).
 2. ~~Disk~~: resolved, 705 GB free. ~~Bandwidth~~: resolved, bind to `enp97s0`.
 3. ~~GitHub repo~~: resolved, `danielbruno77/aerosurr`, **private** (2026-10-24). It was
    briefly public with machine details scrubbed first. Self-hosted runner: still open (§7).
 4. ~~Model choice~~: resolved, NVIDIA PhysicsNeMo (§5.2).
 5. ~~RANS subset and budget~~: resolved by measurement. 100 runs at ~8 min each (target
-   was ≤ 30), ~13 h in all (`docs/rans_benchmark.md`). Running since 2026-10-24 06:38.
+   was ≤ 30), ~13 h in all (`docs/rans_benchmark.md`). The batch finished: 100 cases,
+   median 12.7 min each, 21.3 h in all (`total_s`; see Compute in `docs/results.md`).
 6. ~~Code licence~~: deferred while the repo is private; decide before making it public.
    The data is CC BY-SA 4.0 either way.
 7. ~~CPU slot masks~~: resolved by measurement. One case at a time with 24 ranks spread
    3 per CCD; training on CCD offsets 3–7 (§2). Two-case layouts lose throughput.
-8. Git identity: no global `user.name` or `user.email` is configured. The Day-0 commit
-   was made with `-c` flags only.
+8. ~~Git identity~~: resolved. Daniel set the global `user.name` and `user.email`; the
+   Day-0 commit was made with `-c` flags only.

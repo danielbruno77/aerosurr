@@ -19,7 +19,7 @@ claude.ai artifact.
 
 ![Cd and Cl parity on full_test](docs/figures/parity_main.png)
 
-**Status: Day 1 done.** Every one of the 484 runs passes the physics gate (integrated
+**Status: complete.** Days 0–3 ran on 24–25 Oct 2026; design ranking was added on 3 Nov. Every one of the 484 runs passes the physics gate (integrated
 forces match DrivAerML's reference CSVs to ≤ 8e-7). The 100-case coarse RANS batch, the
 deep ensemble and the MF study (3 seeds per model) are done. Feeding RANS fields into
 the network did not pay off for fields: the MF model's shear errors are higher than an

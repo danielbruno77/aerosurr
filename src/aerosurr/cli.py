@@ -1187,7 +1187,9 @@ def report(
     from aerosurr.eval.report import build_report
 
     paths, data = state.paths(), state.data()
-    done = build_report(paths.runs, paths.data_store / data.store.version, out, figures)
+    done = build_report(
+        paths.runs, paths.data_store / data.store.version, out, figures, rans=paths.rans
+    )
     typer.echo(f"{out}: sections {done or 'none yet'}")
 
 

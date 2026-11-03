@@ -1,6 +1,6 @@
 # Model card: aerosurr surface surrogate
 
-Status: draft, written while training runs. Every metric below links to
+Status: final (2026-11-03). Every metric below links to
 [docs/results.md](docs/results.md), which `aerosurr report` regenerates from the
 evaluation files, so this card never carries numbers by hand.
 
@@ -119,13 +119,10 @@ See [docs/results.md](docs/results.md):
 
 Hardware: AMD Threadripper 9980X (64 cores) and 2 × RTX 5090, single workstation.
 
-| Work | Approximate cost |
-|---|---|
-| Main Transolver (150 epochs) | ~2.5 GPU-h at ~0.5 kW |
-| Data-efficiency runs, ensemble, MF study | ~12 GPU-h |
-| Coarse RANS, 100 cases | ~22 h on 24 cores at ~0.25 kW package power |
-
-Final totals go in [docs/results.md](docs/results.md) once the runs finish.
+GPU-hours per group of runs (main models, ensembles, OOD, data efficiency, MF study,
+baseline) and the coarse-RANS hours are in the Compute section of
+[docs/results.md](docs/results.md), which `aerosurr report` sums from each run's
+`summary.json` and each RANS case's `aerosurr_run.json`.
 
 ## Citation
 
