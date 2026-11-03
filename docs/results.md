@@ -17,6 +17,41 @@ Main model, selected on `full_val` Cd MAE (3.13 counts): **PhysicsNeMo GeoTranso
 
 ![Cd and Cl parity](figures/parity_main.png)
 
+## Design ranking on `full_test` (50 cars, 1225 pairs)
+
+For design work the order of candidates and the size of a drag difference matter more than absolute Cd. A pair is in the right order when the predicted and true Cd differences have the same sign. The error on a drag difference is |(p_i − p_j) − (t_i − t_j)| over all pairs; a constant bias cancels in it. The lowest-drag pick is the car with the lowest predicted Cd: its true rank, its distance from the true best and the overlap of the predicted and true top 5. Coarse RANS is the in-house OpenFOAM case of each car (SPEC §5.3). From `aerosurr eval ranking` (`geotransolver_main_v1/ranking_full_test.json`).
+
+| Predictor | Cd MAE (counts) | Bias | Spearman | Pairs ≥ 5 counts apart in order | ΔCd error mean / p90 (counts) | Lowest-drag pick | Top-5 overlap |
+|---|---|---|---|---|---|---|---|
+| GeoTransolver | 2.82 | -1.40 | 0.979 | 98.6 % | 3.82 / 7.88 | `run_124`: true rank 1, 0.00 counts off | 5/5 |
+| ensemble_v2 mean | 1.90 | -0.59 | 0.984 | 98.9 % | 2.85 / 6.24 | `run_284`: true rank 2, 2.57 counts off | 4/5 |
+| coarse RANS | 9.49 | +4.21 | 0.805 | 84.9 % | 11.85 / 24.05 | `run_284`: true rank 2, 2.57 counts off | 3/5 |
+
+Pairs in the right drag order, by band of true |ΔCd|:
+
+| True \|ΔCd\| (counts) | Pairs | GeoTransolver | ensemble_v2 mean | coarse RANS |
+|---|---|---|---|---|
+| 0–2 | 77 | 57.1 % | 59.7 % | 49.4 % |
+| 2–5 | 111 | 82.0 % | 87.4 % | 64.9 % |
+| 5–10 | 207 | 93.7 % | 94.7 % | 60.4 % |
+| 10–20 | 321 | 99.7 % | 100.0 % | 81.3 % |
+| ≥ 20 | 509 | 100.0 % | 100.0 % | 97.1 % |
+
+Other coefficients (MAE in counts, Spearman):
+
+| Predictor | Coefficient | MAE (counts) | Spearman |
+|---|---|---|---|
+| GeoTransolver | cl | 9.04 | 0.968 |
+| GeoTransolver | clf | 4.58 | 0.993 |
+| GeoTransolver | clr | 6.16 | 0.984 |
+| GeoTransolver | cd_pressure | 2.82 | 0.977 |
+| GeoTransolver | cd_friction | 0.09 | 0.996 |
+| coarse RANS | Cl | 66.80 | 0.792 |
+| coarse RANS | Clf | 28.30 | 0.945 |
+| coarse RANS | Clr | 39.20 | 0.808 |
+
+![Design ranking per band](figures/ranking_bands.png)
+
 ## Data efficiency (nested official splits)
 
 HF-only Transolver trained on `super_scarce` ⊂ `scarce` ⊂ `medium` ⊂ `full` with

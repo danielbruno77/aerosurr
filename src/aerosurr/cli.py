@@ -1022,6 +1022,83 @@ def eval_ensemble_cd(
     typer.echo(json.dumps(res, indent=1))
 
 
+@eval_app.command("ranking")
+def eval_ranking(
+    model: Annotated[str, typer.Option(help="Surrogate run (dir under paths.runs).")] = (
+        "geotransolver_main_v1"
+    ),
+    ensemble: Annotated[
+        str | None, typer.Option(help="Ensemble with member_cd.json; '' to skip.")
+    ] = "ensemble_v2",
+    split: Annotated[str, typer.Option(help="Evaluated split.")] = "full_test",
+) -> None:
+    """Design ranking on `split`: Spearman, pairs in the right drag order per band of true
+    |dCd|, error on a drag difference and the lowest-drag pick, for the surrogate, the
+    ensemble mean and coarse RANS. Writes <model>/ranking_<split>.json."""
+    import statistics as st
+
+    from aerosurr.data.splits import load_manifest
+    from aerosurr.eval.ranking import COUNTS, coeff_row, render, score
+
+    paths = state.paths()
+    runs_dir = paths.runs
+    manifest = load_manifest(paths.data_raw / "splits/manifest.json")
+    runs = sorted(manifest[split], key=lambda r: int(r.removeprefix("run_")))
+    geo = json.loads((runs_dir / model / f"{split}.json").read_text())["per_run"]
+    rans: dict[str, dict[str, Any]] = {}
+    for f in (paths.rans / "batch").glob("run_*_coarse_np24/aerosurr_run.json"):
+        d = json.loads(f.read_text())
+        if d.get("status") == "done":
+            rans[d["case"].split("_coarse")[0]] = d
+    missing = [r for r in runs if r not in geo or r not in rans]
+    if missing:
+        raise typer.BadParameter(f"no surrogate or RANS result for {missing}")
+    true = [geo[r]["true"]["cd"] for r in runs]
+    preds = {model_label(model): [geo[r]["pred"]["cd"] for r in runs]}
+    if ensemble:
+        members = json.loads((runs_dir / ensemble / "member_cd.json").read_text())[split]
+        preds[f"{ensemble} mean"] = [st.mean(members[r]["cd_members"]) for r in runs]
+    preds["coarse RANS"] = [rans[r]["coeffs"]["Cd"] for r in runs]
+    cases = list(rans.values())
+    res: dict[str, Any] = {
+        "split": split,
+        "model": model,
+        "ensemble": ensemble or None,
+        "runs": runs,
+        "n_cars": len(runs),
+        "n_pairs": len(runs) * (len(runs) - 1) // 2,
+        "true_cd_range_counts": [COUNTS * min(true), COUNTS * max(true)],
+        "predictors": {k: score(runs, true, p) for k, p in preds.items()},
+        "coefficients": {
+            f"{model_label(model)}, other coefficients": {
+                q: coeff_row([geo[r]["true"][q] for r in runs], [geo[r]["pred"][q] for r in runs])
+                for q in ("cl", "clf", "clr", "cd_pressure", "cd_friction")
+            },
+            "coarse RANS, other coefficients on the test cars": {
+                q: coeff_row(
+                    [rans[r]["reference"][q] for r in runs], [rans[r]["coeffs"][k] for r in runs]
+                )
+                for q, k in (("Cl", "Cl"), ("Clf", "Cl(f)"), ("Clr", "Cl(r)"))
+            },
+        },
+        "rans_cost": {
+            "cases": len(cases),
+            "median_min_per_case": st.median(c["total_s"] for c in cases) / 60,
+            "median_cells_m": st.median(c["cells"] for c in cases) / 1e6,
+            "ranks": int(st.median(c["n_ranks"] for c in cases)),
+            "median_cd_std_counts": COUNTS * st.median(c["coeffs_std"]["Cd"] for c in cases),
+        },
+    }
+    (runs_dir / model / f"ranking_{split}.json").write_text(json.dumps(res, indent=1))
+    typer.echo(render(res), nl=False)
+
+
+def model_label(run: str) -> str:
+    """Display name of a surrogate run: `geotransolver_main_v1` -> `GeoTransolver`."""
+    names = {"geotransolver": "GeoTransolver", "transolver": "Transolver", "pointnet": "PointNet"}
+    return names.get(run.split("_")[0], run)
+
+
 @eval_app.command("ood")
 def eval_ood(
     name: Annotated[str, typer.Option(help="Ensemble name (dir under paths.runs).")],

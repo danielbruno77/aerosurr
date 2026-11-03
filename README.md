@@ -11,6 +11,8 @@ Integrated drag is within **2.8 drag counts** on average (max 11.2, Cd R² 0.96)
 21.8 counts for an in-house PointNet baseline; PhysicsNeMo Transolver reaches 3.9 counts.
 A calibrated deep ensemble of 5 GeoTransolvers brings the drag error to **1.9 counts**
 (Cd R² 0.98), with per-cell 90 % intervals covering 90–91 % of the true values.
+For design ranking, GeoTransolver orders 98.6 % of test-car pairs at least 5 counts apart
+correctly (coarse RANS: 84.9 %) and picks the true lowest-drag car.
 Full tables, data efficiency, the multi-fidelity study and calibration are in
 [docs/results.md](docs/results.md). An interactive 3D viewer is published privately as a
 claude.ai artifact.

@@ -61,6 +61,8 @@ safety-relevant or homologation decision.
 See [docs/results.md](docs/results.md):
 - field errors (area-weighted relative L2 of Cp and each Cf component, native mesh);
 - force errors (Cd MAE and max in drag counts, Cd R², Cl MAE);
+- design ranking (Spearman of Cd, the share of car pairs in the right drag order per
+  band of true |ΔCd|, the error on a drag difference and the lowest-drag pick);
 - data efficiency across the nested splits;
 - the MF comparison against HF-only and scalar baselines;
 - ensemble calibration (coverage at 50/90/95 %, NLL, Spearman of σ against |error|,

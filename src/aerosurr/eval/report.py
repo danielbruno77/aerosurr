@@ -8,6 +8,7 @@ regenerated at any point of the project.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -491,6 +492,102 @@ def _ood_section(o: dict[str, Any], w: Callable[[str], None]) -> None:
     )
 
 
+RANKING_MODEL = "geotransolver_main_v1"
+
+
+def _band_label(b: dict[str, Any]) -> str:
+    return f"≥ {b['lo']:g}" if math.isinf(b["hi"]) else f"{b['lo']:g}–{b['hi']:g}"
+
+
+def fig_ranking(res: dict[str, Any], out: Path) -> Path:
+    """Share of car pairs put in the right drag order, per band of true |dCd|."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    preds = res["predictors"]
+    names = list(preds)
+    # surrogate blue, ensemble aqua, RANS orange: fixed by role, not by position
+    color = {
+        n: SERIES[1] if n == "coarse RANS" else SERIES[2] if "mean" in n else SERIES[0]
+        for n in names
+    }
+    bands = preds[names[0]]["bands"]
+    fig, ax = plt.subplots(figsize=(7.0, 4.3), facecolor=SURFACE)
+    width = 0.8 / len(names)
+    for k, n in enumerate(names):
+        x = [i + (k - (len(names) - 1) / 2) * width for i in range(len(bands))]
+        y = [100 * b["share"] for b in preds[n]["bands"]]
+        ax.bar(x, y, width * 0.92, color=color[n], label=n, edgecolor=SURFACE, linewidth=1)
+    ax.axhline(50, color=MUTED, linewidth=1.2, linestyle=(0, (4, 3)), label="50 % (coin flip)")
+    ax.set_xticks(range(len(bands)))
+    ax.set_xticklabels([f"{_band_label(b)}\n({b['pairs']} pairs)" for b in bands])
+    ax.set_ylim(0, 105)
+    ax.set_xlabel("True |ΔCd| between two cars (counts)")
+    ax.set_ylabel("Pairs in the right drag order (%)")
+    ax.set_title(
+        f"Design ranking on {res['split']} ({res['n_cars']} cars)", fontsize=11, loc="left"
+    )
+    ax.legend(
+        frameon=False,
+        fontsize=9,
+        labelcolor=TEXT_2,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.2),
+        ncol=len(names) + 1,
+    )
+    _style(ax)
+    fig.tight_layout()
+    fig.savefig(out, dpi=150, facecolor=SURFACE)
+    plt.close(fig)
+    return out
+
+
+def _ranking_section(
+    res: dict[str, Any], fig: Path, rel: Callable[[Path], str], w: Callable[[str], None]
+) -> None:
+    preds = res["predictors"]
+    w(f"## Design ranking on `{res['split']}` ({res['n_cars']} cars, {res['n_pairs']} pairs)\n")
+    w(
+        "For design work the order of candidates and the size of a drag difference matter "
+        "more than absolute Cd. A pair is in the right order when the predicted and true Cd "
+        "differences have the same sign. The error on a drag difference is "
+        "|(p_i − p_j) − (t_i − t_j)| over all pairs; a constant bias cancels in it. The "
+        "lowest-drag pick is the car with the lowest predicted Cd: its true rank, its "
+        "distance from the true best and the overlap of the predicted and true top 5. "
+        "Coarse RANS is the in-house OpenFOAM case of each car (SPEC §5.3). "
+        f"From `aerosurr eval ranking` (`{res['model']}/ranking_{res['split']}.json`).\n"
+    )
+    w(
+        "| Predictor | Cd MAE (counts) | Bias | Spearman | Pairs ≥ 5 counts apart in order "
+        "| ΔCd error mean / p90 (counts) | Lowest-drag pick | Top-5 overlap |"
+    )
+    w("|---|---|---|---|---|---|---|---|")
+    for n, s in preds.items():
+        de, pk = s["delta_error"], s["pick"]
+        w(
+            f"| {n} | {s['cd_mae_counts']:.2f} | {s['cd_bias_counts']:+.2f} | "
+            f"{s['spearman']:.3f} | {100 * s['pairs_ge5_ordered']:.1f} % | "
+            f"{de['mean_counts']:.2f} / {de['p90_counts']:.2f} | `{pk['run']}`: true rank "
+            f"{pk['true_rank']}, {pk['counts_off']:.2f} counts off | {pk['top5_overlap']}/5 |"
+        )
+    bands = preds[next(iter(preds))]["bands"]
+    w("\nPairs in the right drag order, by band of true |ΔCd|:\n")
+    w("| True \\|ΔCd\\| (counts) | Pairs | " + " | ".join(preds) + " |")
+    w("|---|---|" + "---|" * len(preds))
+    for i, b in enumerate(bands):
+        cells = " | ".join(f"{100 * preds[n]['bands'][i]['share']:.1f} %" for n in preds)
+        w(f"| {_band_label(b)} | {b['pairs']} | {cells} |")
+    w("\nOther coefficients (MAE in counts, Spearman):\n")
+    w("| Predictor | Coefficient | MAE (counts) | Spearman |\n|---|---|---|---|")
+    for title, rows in res["coefficients"].items():
+        who = title.split(",")[0]
+        for q, r in rows.items():
+            w(f"| {who} | {q} | {r['mae_counts']:.2f} | {r['spearman']:.3f} |")
+    w(f"\n![Design ranking per band]({rel(fig)})\n")
+
+
 def build_report(runs: Path, store: Path, out_md: Path, fig_dir: Path) -> list[str]:
     """Write `out_md` (+ figures). Returns the sections that had data."""
     from aerosurr.data.store import load_index
@@ -533,6 +630,11 @@ def build_report(runs: Path, store: Path, out_md: Path, fig_dir: Path) -> list[s
         title = f"{main_label} on full_test" + (" (bars: ensemble σ)" if sigma else "")
         f = fig_parity(main, sigma, fig_dir / "parity_main.png", title)
         w(f"![Cd and Cl parity]({rel(f)})\n")
+
+    rank = _load(runs / RANKING_MODEL / "ranking_full_test.json")
+    if rank:
+        done.append("ranking")
+        _ranking_section(rank, fig_ranking(rank, fig_dir / "ranking_bands.png"), rel, w)
 
     ds_all = {n: _load(runs / f"transolver_ds_{s}" / "full_test.json") for s, n in DS}
     ds = {n: ev for n, ev in ds_all.items() if ev is not None}
